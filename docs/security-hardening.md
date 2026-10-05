@@ -36,13 +36,13 @@
 | `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests/windows-startup-native.ps1` | 原生进程身份/参数、后台拒绝、正常 OS shutdown、拒绝强退、隐藏重启、输入取消和 stop guard；合成客户端。 |
 | `git diff --check` | 修改无 whitespace 错误。 |
 
+GitHub Actions PR run `37263376223`（Windows 与 macOS）也已通过：两平台 `npm ci --ignore-scripts`、完整 `npm test`、release security/audit；Windows 原生安装、更新归档、startup adapter；macOS 原生 startup helper、lifecycle 和跨平台 PowerShell/update fixtures。
+
 本机没有 Playwright bundled Chromium，首次 UI 测试因此失败；后续显式设置 `PLAYWRIGHT_EXECUTABLE_PATH` 使用已安装 Chrome，完整 suite 通过。原来的 Python3 Windows Store alias 导致 privacy 命令失败，已用平台对应的 Python launcher 修复。原生 rollback 测试发现 WinPS 5.1 将 File.Replace 的 null backup 转成空字符串；改用随机备份路径后通过。最终复跑全部通过，没有隐藏失败。
 
 ## Tests not run
 
-本机为 Windows，不能执行 macOS Objective-C/AppKit helper 编译、NSWorkspace 启动/退出/前台恢复、LaunchAgent 原生生命周期、macOS 完整 agent reconnect 回归或真实 Store Codex 登录环境。
-
-已有两平台共用的 updater、ZIP、网络、CDP、privacy 测试，以及 macOS startup controller/shortcut 单元测试；CI 保留 macOS runner 原生测试。仍需真实 macOS 验证 native helper 参数签名、plain-launch guard、正常 quit/relaunch、private runtime permissions、安装 rollback 与现有 Codex UI 注入。Windows 真实 Store 激活路径只做源码/guard 审计，原生本机测试使用合成 executable，不声称已验证真实 Store 应用。
+本机为 Windows，未执行 macOS Objective-C/AppKit helper、NSWorkspace 前台恢复、LaunchAgent 原生生命周期或真实 Store Codex 登录环境；上述合成 macOS 流程已由 PR CI 的 macOS runner 通过。Windows 真实 Store 激活路径仍只做源码/guard 审计，原生测试使用合成 executable，不声称已验证真实 Store 应用。
 
 ## 全仓审计判定
 
@@ -75,7 +75,7 @@
 
 ## Commit / Push / Deploy
 
-独立提交：`security: harden updater, CDP transport, and local runtime`，本地分支 `codex/security-hardening`，仓库 `xrchanx/codex-usage-badge`。未 push 到任何 remote，未发布 Release，未部署到服务器或覆盖用户安装。
+独立提交：`security: harden updater, CDP transport, and local runtime`（后续 CI 兼容性修复仍在同一分支）。已更新 fork 远端分支 `xrchanx/codex-usage-badge:codex/security-hardening` 并创建 PR [#1](https://github.com/xrchanx/codex-usage-badge/pull/1)；未 push 到 upstream、未发布 Release、未部署到服务器或覆盖用户安装。
 
 ## Files changed
 
