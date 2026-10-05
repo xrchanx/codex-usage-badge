@@ -55,7 +55,11 @@ function assertPrivate(file){
   // Reject broad/interactive-user groups while retaining SYSTEM/admin access.
   const script='$ErrorActionPreference="Stop"; $p=$env:CODEX_BADGE_OWNED_DIR; $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value; $deny=@("Everyone","NT AUTHORITY\\Authenticated Users","BUILTIN\\Users","Users"); $acl=if([IO.Directory]::Exists($p)){[IO.Directory]::GetAccessControl($p)}else{[IO.File]::GetAccessControl($p)}; if($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $sid){throw "Owner mismatch"}; foreach($rule in $acl.GetAccessRules($true,$true,[Security.Principal.NTAccount])){if($rule.AccessControlType -eq "Allow" -and $deny -contains $rule.IdentityReference.Value){throw "Public runtime access"}}';
   try{require('node:child_process').execFileSync(path.join(process.env.SystemRoot,'System32/WindowsPowerShell/v1.0/powershell.exe'),['-NoProfile','-NonInteractive','-Command',script],{windowsHide:true,stdio:'pipe',env:{...process.env,CODEX_BADGE_OWNED_DIR:file}});}
-  catch{throw Error('Runtime permissions are not private');}
+  catch(error){
+    const stderr=String(error?.stderr||'');
+    const reason=stderr.includes('Owner mismatch')?'owner':stderr.includes('Public runtime access')?'public':error?.code==='ENOENT'?'helper':'acl';
+    throw Error(`Runtime permissions are not private (${reason})`);
+  }
   checkedPermissions.set(file,stamp);
 }
 function readSession(directory=installDirectory()){
