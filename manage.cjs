@@ -196,9 +196,7 @@ async function targets() {
   if(!response.ok)throw new Error('本机端口暂不可连接');
   const list=await response.json();
   if(!Array.isArray(list)||list.length>128)throw new Error('Invalid CDP target list');
-  const pages=list.filter(t=>{try{validateCdpTarget(t,port);return true;}catch{return false;}});
-  if(!pages.length&&list.some(t=>t?.type==='page'&&t?.url==='app://-/index.html'))throw new Error('Untrusted Codex window target');
-  return pages;
+  return list.filter(t=>{try{validateCdpTarget(t,port);return true;}catch{return false;}});
 }
 async function cdp(target,method,params) {
   if(method!=='Runtime.evaluate')throw Error('Unsupported CDP helper');
@@ -297,9 +295,7 @@ async function scheduleActivation(options={}) {
   console.log('单次启用任务已提交，KeepAlive=false；退出后不会重复运行。');
 }
 async function cleanupUi() {
-  let pages=[];
-  try{pages=await targets();}
-  catch(error){if(error.message==='Untrusted Codex window target')console.warn('部分窗口暂不可连接；后台仍会卸载，残留界面将在下次打开客户端时消失。');return;}
+  let pages=[];try{pages=await targets();}catch{return;}
   const results=await Promise.allSettled(pages.map(page=>evaluate(page,'(() => {window.__codexUsageBadge?.destroy?.();window.__codexProjectColors?.destroy?.({clearStorage:true});window.__codexThreadTokens?.destroy?.();window.__codexProjectSizes?.destroy?.();return !document.getElementById("codex-usage-badge")&&!document.getElementById("codex-project-colors-style")&&!document.getElementById("codex-thread-tokens-style")&&!document.getElementById("codex-project-sizes-style");})()')));
   if(results.some(r=>r.status==='rejected'||r.value!==true))console.warn('部分窗口暂不可连接；后台仍会卸载，残留界面将在下次打开客户端时消失。');
 }

@@ -1,5 +1,5 @@
 // Install and migrate in a disposable home; launchctl, Dock and app activation are isolated.
-const assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path'),vm=require('node:vm');
+const assert=require('node:assert/strict'),crypto=require('node:crypto'),fs=require('node:fs'),os=require('node:os'),path=require('node:path'),vm=require('node:vm');
 const cp=require('node:child_process');
 const root=path.resolve(__dirname,'..'),temp=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'badge-install-')));
 const runtime=require('../runtime/state.cjs');
@@ -33,7 +33,7 @@ const execFileSync=(bin,args,options)=>{
 };
 class FailedSocket{constructor(){this.events={};setImmediate(()=>this.events.error?.());}addEventListener(n,h){this.events[n]=h;}close(){}}
 const sandbox={module:{exports:{}},__dirname:root,process,Buffer,URL,setTimeout,clearTimeout,AbortSignal,WebSocket:FailedSocket,
-  console:{log:s=>messages.push(s),warn:s=>messages.push(s)},fetch:async()=>({ok:true,json:async()=>[{type:'page',url:'app://-/index.html',webSocketDebuggerUrl:'ws://127.0.0.1/unreachable'}]}),
+  console:{log:s=>messages.push(s),warn:s=>messages.push(s)},fetch:async()=>({ok:true,json:async()=>[{id:'page-1',type:'page',url:'app://-/index.html',webSocketDebuggerUrl:'ws://127.0.0.1:49152/devtools/page/page-1'}]}),
   require:id=>id==='node:fs'?testFs:id==='node:os'?{...os,homedir:()=>temp}:id==='node:child_process'?{...cp,execFileSync}:id==='./agent.cjs'?require('../agent.cjs'):id==='./macos/shortcuts.cjs'?require('../macos/shortcuts.cjs'):id==='./updater/core.cjs'?require('../updater/core.cjs'):id==='./runtime/state.cjs'?{...runtime,atomicWrite(file,data){if(failCopy&&file===path.join(installDir,'startup-helper/bridge')){failCopy=false;throw Error('simulated helper write failure');}return runtime.atomicWrite(file,data);}}:require(id)};
 vm.runInNewContext(fs.readFileSync(path.join(root,'manage.cjs'),'utf8'),sandbox,{filename:'manage.cjs'});
 const manager=sandbox.module.exports;
@@ -74,6 +74,8 @@ const manager=sandbox.module.exports;
   await manager.install();
   assert.equal(fs.existsSync(launcher),false);assert.throws(()=>fs.lstatSync(shortcut),{code:'ENOENT'});
   assert.ok(calls.some(c=>c[0].endsWith('/lsregister')));
+  runtime.secureDirectory(path.join(installDir,'runtime'));
+  runtime.writeJson(runtime.sessionFile(installDir),{owner:runtime.OWNER,host:'127.0.0.1',port:49152,session:crypto.randomUUID(),createdAt:Date.now()});
   await manager.uninstall();assert.equal(jobs.size,0);assert.equal(fs.existsSync(installDir),false);
   assert.ok(messages.some(s=>s.includes('部分窗口暂不可连接')));
   fs.mkdirSync(path.join(launcher,'Contents'),{recursive:true});
