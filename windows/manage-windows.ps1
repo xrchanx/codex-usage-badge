@@ -34,7 +34,7 @@ function Set-PrivateDirectory([string]$Path) {
     $acl = New-Object Security.AccessControl.DirectorySecurity
     $acl.SetOwner($sid); $acl.SetAccessRuleProtection($true,$false)
     $rule = New-Object Security.AccessControl.FileSystemAccessRule($sid,'FullControl','ContainerInherit,ObjectInherit','None','Allow')
-    $acl.AddAccessRule($rule); (Get-Item -LiteralPath $Path).SetAccessControl($acl)
+    $acl.AddAccessRule($rule); Set-Acl -LiteralPath $Path -AclObject $acl
 }
 function Write-Utf8([string]$Path, [string]$Text) {
     Assert-SafePath $Path
@@ -516,7 +516,10 @@ function Install-Badge($Overrides) {
         if ($wasRunning) { Start-Worker }
         throw $failure
     } finally {
-        if (Test-Path -LiteralPath $stage) { Assert-OwnedDirectory $stage; Remove-Item -LiteralPath $stage -Recurse -Force }
+        if (Test-Path -LiteralPath $stage) {
+            try { Assert-OwnedDirectory $stage; Remove-Item -LiteralPath $stage -Recurse -Force }
+            catch { if ($null -eq $failure) { throw } }
+        }
     }
     Write-Host '安装成功。下次完全退出后，直接使用原来的 Codex 图标打开即可自动加载。'
     Write-Host '已打开的窗口不会被接管。若自动加载被安全保护跳过，可完全退出后运行 Launch.cmd。'
