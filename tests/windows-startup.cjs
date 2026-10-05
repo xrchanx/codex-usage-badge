@@ -7,7 +7,7 @@ const {EventEmitter}=require('node:events');
 const {PassThrough}=require('node:stream');
 const {NativeBridge,readReceipt,writeReceipt}=require('../startup/windows.cjs');
 (async()=>{
-  const temp=fs.mkdtempSync(path.join(os.tmpdir(),'badge-startup-'));
+  const temp=fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()),'badge-startup-'));
   const oldSystemRoot=process.env.SystemRoot;process.env.SystemRoot=temp;
   try {
     const receipt=path.join(temp,'state.json');
@@ -37,3 +37,4 @@ const {NativeBridge,readReceipt,writeReceipt}=require('../startup/windows.cjs');
     console.log('PASS Windows startup receipts, invalid-state refusal, hidden persistent RPC, response errors and helper exit');
   } finally {if(oldSystemRoot===undefined)delete process.env.SystemRoot;else process.env.SystemRoot=oldSystemRoot;fs.rmSync(temp,{recursive:true,force:true});}
 })().catch(error=>{console.error(error);process.exitCode=1;});
+

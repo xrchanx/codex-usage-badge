@@ -25,7 +25,7 @@ class StartupController {
         return;
       }
       const app=fresh[0], age=this.now()-app.launchedAt;
-      if(!app.argumentsKnown||app.debugPort!==null) { this.seen.add(app.key); return; }
+      if(!app.argumentsKnown||app.plainLaunch!==true||app.debugPort!==null) { this.seen.add(app.key); return; }
       // Wait for the initial launch to finish; never interrupt a partially initialized app.
       if((!app.finishedLaunching||snapshot.frontmostPid!==app.pid) && age>=0 && age<=8000 && snapshot.inputIdleMs>=age) {
         this.pendingLaunch=true; return;
@@ -75,8 +75,9 @@ class StartupController {
       const shown=await this.adapter.show(opened,snapshot.inputStamp,beforeLaunch.frontmostPid);
       await this.adapter.record('reopened',{shown:!!shown.shown,processKey:opened.key});
     } catch(error) {
-      await this.adapter.record('error',{message:error.message}).catch(()=>{});
+      await this.adapter.record('error',{message:'Startup action failed'}).catch(()=>{});
     } finally { this.busy=false; }
   }
 }
 module.exports={StartupController};
+

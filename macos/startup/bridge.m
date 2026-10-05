@@ -46,7 +46,7 @@ static NSDictionary *argumentsState(pid_t pid) {
         if ([s hasPrefix:@"--remote-debugging-port="]) port = [s substringFromIndex:24];
         if ([s isEqualToString:@"--remote-debugging-port"]) port = i+1<args.count ? args[i+1] : @"";
     }
-    return @{@"known":@YES, @"port":port};
+    return @{@"known":@YES, @"plain":@(args.count==1), @"port":port};
 }
 static NSString *identity(NSRunningApplication *a) {
     return [NSString stringWithFormat:@"%d:%.0f", a.processIdentifier, a.launchDate.timeIntervalSince1970*1000];
@@ -57,7 +57,7 @@ static NSDictionary *snapshot(NSString *path) {
     for (NSRunningApplication *a in w.runningApplications) {
         if (!matches(a,path) || !a.launchDate) continue;
         NSDictionary *args = argumentsState(a.processIdentifier);
-        [apps addObject:@{@"pid":@(a.processIdentifier), @"key":identity(a), @"launchedAt":@(a.launchDate.timeIntervalSince1970*1000), @"finishedLaunching":@(a.finishedLaunching), @"argumentsKnown":args[@"known"], @"debugPort":args[@"port"] ?: NSNull.null}];
+        [apps addObject:@{@"pid":@(a.processIdentifier), @"key":identity(a), @"launchedAt":@(a.launchDate.timeIntervalSince1970*1000), @"finishedLaunching":@(a.finishedLaunching), @"argumentsKnown":args[@"known"], @"plainLaunch":args[@"plain"] ?: @NO, @"debugPort":args[@"port"] ?: NSNull.null}];
     }
     return @{@"apps":apps, @"frontmostPid":@(w.frontmostApplication.processIdentifier), @"inputStamp":inputStamp(), @"inputIdleMs":@(inputIdleMs())};
 }
@@ -136,15 +136,16 @@ int main(int argc, const char *argv[]) { @autoreleasepool {
         double age = a.launchDate ? (NSDate.date.timeIntervalSince1970-a.launchDate.timeIntervalSince1970)*1000 : INFINITY;
         NSDictionary *args = a ? argumentsState(a.processIdentifier) : @{};
         // Recheck all guards at the native action boundary. No forceTerminate, kill or app activation.
-        BOOL safe = matches(a,path) && a.finishedLaunching && [identity(a) isEqualToString:@(argv[4])] && age>=0 && age<=8000 && inputIdleMs()>=age && [inputStamp() isEqualToString:@(argv[5])] && NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier==a.processIdentifier && [args[@"known"] boolValue] && args[@"port"]==NSNull.null;
+        BOOL safe = matches(a,path) && a.finishedLaunching && [identity(a) isEqualToString:@(argv[4])] && age>=0 && age<=8000 && inputIdleMs()>=age && [inputStamp() isEqualToString:@(argv[5])] && NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier==a.processIdentifier && [args[@"known"] boolValue] && [args[@"plain"] boolValue] && args[@"port"]==NSNull.null && [snapshot(path)[@"apps"] count]==1;
         output(@{@"accepted":(safe && [a terminate]) ? @YES : @NO}); return 0;
     }
-    if ([action isEqualToString:@"launch"] && argc==5) {
+    if ([action isEqualToString:@"launch"] && argc==6) {
+        int port=atoi(argv[5]); if(port<49152 || port>65535) return 2;
         NSDictionary *current=snapshot(path);
         if ([current[@"apps"] count] || ![current[@"inputStamp"] isEqualToString:@(argv[3])] || [current[@"frontmostPid"] intValue]!=atoi(argv[4])) { output(@{@"launched":@NO}); return 0; }
         NSWorkspaceOpenConfiguration *config=NSWorkspaceOpenConfiguration.configuration;
         config.activates=NO; config.hides=YES; config.addsToRecentItems=NO;
-        config.arguments=@[@"--remote-debugging-address=127.0.0.1", @"--remote-debugging-port=39222"];
+        config.arguments=@[@"--remote-debugging-address=127.0.0.1", [NSString stringWithFormat:@"--remote-debugging-port=%d",port]];
         __block BOOL done=NO;
         [NSWorkspace.sharedWorkspace openApplicationAtURL:[NSURL fileURLWithPath:path] configuration:config completionHandler:^(NSRunningApplication *a,NSError *e){
             output(e ? @{@"launched":@NO, @"errorCode":@(e.code)} : @{@"launched":@YES, @"pid":@(a.processIdentifier), @"key":identity(a)}); done=YES;
@@ -153,13 +154,15 @@ int main(int argc, const char *argv[]) { @autoreleasepool {
         while (!done && deadline.timeIntervalSinceNow>0) [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
         return done?0:3;
     }
-    if ([action isEqualToString:@"show"] && argc==7) {
+    if ([action isEqualToString:@"show"] && argc==8) {
+        int port=atoi(argv[7]); if(port<49152 || port>65535) return 2;
         NSRunningApplication *a=[NSRunningApplication runningApplicationWithProcessIdentifier:atoi(argv[3])];
         NSDictionary *args = a ? argumentsState(a.processIdentifier) : @{};
         double age = a.launchDate ? (NSDate.date.timeIntervalSince1970-a.launchDate.timeIntervalSince1970)*1000 : INFINITY;
-        BOOL safe=matches(a,path) && age>=0 && age<=30000 && [identity(a) isEqualToString:@(argv[4])] && [args[@"known"] boolValue] && [args[@"port"] isEqual:@"39222"] && [inputStamp() isEqualToString:@(argv[5])] && NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier==atoi(argv[6]);
+        BOOL safe=matches(a,path) && age>=0 && age<=30000 && [identity(a) isEqualToString:@(argv[4])] && [args[@"known"] boolValue] && [args[@"port"] isEqual:[NSString stringWithFormat:@"%d",port]] && [inputStamp() isEqualToString:@(argv[5])] && NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier==atoi(argv[6]);
         if (safe) { [a unhide]; safe=[a activateWithOptions:NSApplicationActivateAllWindows]; }
         output(@{@"shown":safe ? @YES : @NO}); return 0;
     }
     return 2;
 } }
+

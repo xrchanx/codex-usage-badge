@@ -1,7 +1,6 @@
 var AGENT_VERSION = '0.9.4';
 function parseArgs(argv) {
   const options = {
-    port: Number(process.env.CODEX_BADGE_PORT) || 39222,
     appPath: process.env.CODEX_BADGE_APP || (process.platform === 'win32' ? '' : '/Applications/ChatGPT.app'),
     codexBin: process.env.CODEX_BADGE_BIN || 'codex',
     pollMs: Number(process.env.CODEX_BADGE_POLL_MS) || 60000,
@@ -9,7 +8,7 @@ function parseArgs(argv) {
   };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--debug') options.debug = true;
-    else if (argv[i] === '--port') options.port = Number(argv[++i]);
+    else if (argv[i] === '--port') throw Error('CDP port must come from owned runtime state');
     else if (argv[i] === '--app') options.appPath = argv[++i];
     else if (argv[i] === '--codex-bin') options.codexBin = argv[++i];
     else if (argv[i] === '--poll-ms') options.pollMs = Math.max(1000, Number(argv[++i]));
@@ -22,8 +21,8 @@ function log(...args) {
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   options.codexBin = resolveCodexBin(options.codexBin, options.appPath);
-  log(`codex-usage-badge v${AGENT_VERSION} 启动：仅连接本机端口 ${options.port}，不启动、不退出、不激活客户端。`);
-  const injector = new RendererInjector({ port: options.port, debug: options.debug, scanIntervalMs: 5000 });
+  log(`codex-usage-badge v${AGENT_VERSION} 启动：仅连接受控本机 session，不启动、不退出、不激活客户端。`);
+  const injector = new RendererInjector();
   const tokenReader = new ThreadTokenReader();
   const projectSizeScanner = new ProjectSizeScanner();
   let stopped = false;
@@ -89,7 +88,7 @@ async function main() {
       old?.stop();
       failures++;
       nextRead = Date.now() + Math.min(60000, 10000 * failures);
-      if (failures === 1 || failures % 10 === 0) log(`用量暂不可用：${error.message}`);
+      if (failures === 1 || failures % 10 === 0) log('用量暂不可用');
       await injector.update(unavailableValue(injector.currentValue));
     } finally { pending = false; }
   }
@@ -103,7 +102,7 @@ async function main() {
   const tick = async () => {
     await scan();
     // Quota requests can wait on the network; pending prevents overlap without delaying local reads.
-    readUsage().catch(error => { if (!stopped) log(`额度刷新暂不可用：${error.message}`); });
+    readUsage().catch(() => { if (!stopped) log('额度刷新暂不可用'); });
     await refreshThreadTokens(injector, tokenReader);
     await updateProjectSizes();
   };
@@ -111,7 +110,7 @@ async function main() {
   const guardedTick = async () => {
     if (ticking || stopped) return;
     ticking = true;
-    try { await tick(); } catch (error) { log(`连接暂不可用：${error.message}`); }
+    try { await tick(); } catch { log('连接暂不可用'); }
     finally { ticking = false; }
   };
   const timer = setInterval(guardedTick, 5000);
@@ -137,5 +136,6 @@ async function main() {
 }
 module.exports = { installUsageBadge, installProjectColors, installProjectSizes, installThreadTokens, ThreadTokenReader, refreshThreadTokens,
   ProjectSizeScanner, measureDirectory, measureDirectoryPortable, measureProjectRoots, refreshProjectSizes,
-  buildBootstrapScript, formatRateLimits, mergeRateLimitsResponse, isMainWindow, resolveCodexBin, AppServerClient, main };
-if (require.main === module) main().catch(error => { log(`agent 启动失败：${error.message}`); process.exitCode = 1; });
+  buildBootstrapScript, formatRateLimits, mergeRateLimitsResponse, isMainWindow, validateCdpTarget, validateCdpExpression, resolveCodexBin, AppServerClient, main };
+if (require.main === module) main().catch(() => { log('agent 启动失败'); process.exitCode = 1; });
+

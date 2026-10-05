@@ -125,6 +125,7 @@ namespace CodexUsageBadge.Startup {
         [DllImport("rstrtmgr.dll")] static extern int RmCancelCurrentTask(uint session);
 
         static string appPath, stopPath, applicationId;
+        static int launchedPort;
         static Process parent;
         static InputActivity activity;
         static readonly Dictionary<string,string[]> arguments = new Dictionary<string,string[]>();
@@ -255,18 +256,20 @@ namespace CodexUsageBadge.Startup {
                 }
             } finally { RmEndSession(handle); }
         }
-        public static object Launch(string stamp,int foreground) {
+        public static object Launch(string stamp,int foreground,int port) {
+            if(port<49152||port>65535) throw new ArgumentException("Invalid private CDP port");
             var s=TakeSnapshot();
             if(Stopped()||s.apps.Length!=0||s.inputStamp!=stamp||stamp=="unknown"||s.frontmostPid!=foreground) return new {launched=false};
-            using(var p=StartApplication()) {
+            using(var p=StartApplication(port)) {
                 p.Refresh();
                 if(p.HasExited) throw new InvalidOperationException("Activated desktop process exited: "+p.ExitCode);
-                if(!Matches(p)) throw new InvalidOperationException("Activated desktop process identity did not match: "+ReadImagePath(p)+", session "+p.SessionId);
+                if(!Matches(p)) throw new InvalidOperationException("Activated desktop process identity did not match");
+                launchedPort=port;
                 return new {launched=true,pid=p.Id,key=Identity(p)};
             }
         }
-        static Process StartApplication() {
-            const string flags="--remote-debugging-address=127.0.0.1 --remote-debugging-port=39222";
+        static Process StartApplication(int port) {
+            string flags="--remote-debugging-address=127.0.0.1 --remote-debugging-port="+port;
             if(!String.IsNullOrEmpty(applicationId)) {
                 // WindowsApps executables can reject direct Process.Start with access denied.
                 // AO_NOERRORUI only: AO_NOSPLASHSCREEN requires package debugging and can terminate the app.
@@ -282,14 +285,15 @@ namespace CodexUsageBadge.Startup {
                 UseShellExecute=false,WindowStyle=ProcessWindowStyle.Hidden,WorkingDirectory=Path.GetDirectoryName(appPath)};
             return Process.Start(info);
         }
-        public static object Show(int pid,string key,string stamp,int foreground) {
+        public static object Show(int pid,string key,string stamp,int foreground,int port) {
+            if(port<49152||port>65535||port!=launchedPort) return new {shown=false};
             // Only the verified replacement may receive focus; Store activation can already have shown it.
             var deadline=Stopwatch.StartNew();
             while(deadline.ElapsedMilliseconds<5000) {
                 var s=TakeSnapshot();
                 if(Stopped()||s.inputStamp!=stamp||(s.frontmostPid!=foreground&&s.frontmostPid!=pid)) return new {shown=false};
                 var a=s.apps.FirstOrDefault(x=>x.pid==pid&&x.key==key);
-                if(a==null||a.debugPort!="39222"||Now-a.launchedAt>30000) return new {shown=false};
+                if(a==null||a.debugPort!=port.ToString()||Now-a.launchedAt>30000) return new {shown=false};
                 using(var p=Process.GetProcessById(pid)) {
                     IntPtr window=p.MainWindowHandle;
                     if(window!=IntPtr.Zero) {
@@ -303,3 +307,4 @@ namespace CodexUsageBadge.Startup {
         }
     }
 }
+

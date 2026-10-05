@@ -12,12 +12,13 @@ while ($null -ne ($line=[Console]::ReadLine())) {
         $result=switch($request.action) {
             'snapshot' { [CodexUsageBadge.Startup.Native]::TakeSnapshot() }
             'quit' { [CodexUsageBadge.Startup.Native]::Quit($request.pid,$request.key,$request.stamp) }
-            'launch' { [CodexUsageBadge.Startup.Native]::Launch($request.stamp,$request.foreground) }
-            'show' { [CodexUsageBadge.Startup.Native]::Show($request.pid,$request.key,$request.stamp,$request.foreground) }
+            'launch' { [CodexUsageBadge.Startup.Native]::Launch($request.stamp,$request.foreground,$request.port) }
+            'show' { [CodexUsageBadge.Startup.Native]::Show($request.pid,$request.key,$request.stamp,$request.foreground,$request.port) }
             default { throw 'Unknown startup action' }
         }
         [Console]::WriteLine((@{id=$request.id;result=$result} | ConvertTo-Json -Depth 8 -Compress))
     } catch {
-        [Console]::WriteLine((@{id=$request.id;error=$_.Exception.Message} | ConvertTo-Json -Compress))
+        [Console]::WriteLine((@{id=$request.id;error='Native startup action failed'} | ConvertTo-Json -Compress))
     }
 }
+

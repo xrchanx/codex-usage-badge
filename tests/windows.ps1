@@ -1,4 +1,4 @@
-﻿$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $version = (Get-Content -LiteralPath (Join-Path $root 'package.json') -Raw | ConvertFrom-Json).windowsVersion
 $package = Join-Path $root ('dist/CodexUsageBadge-Windows-' + $version)
@@ -8,6 +8,10 @@ $ast = [Management.Automation.Language.Parser]::ParseFile($manager, [ref]$tokens
 if ($errors.Count) { throw ($errors | Out-String) }
 if ($tokens | Where-Object { $_.Kind.ToString() -in @('QuestionQuestion','QuestionQuestionEquals','AndAnd','OrOr') }) { throw 'Unsupported PowerShell 7 syntax' }
 . $manager -Action Functions
+if ($env:OS -ne 'Windows_NT') {
+    # This suite mocks Windows integration on macOS; native ACLs are verified on Windows.
+    function Set-PrivateDirectory([string]$Path) { Assert-SafePath $Path; [void][IO.Directory]::CreateDirectory($Path) }
+}
 function Assert($Condition, [string]$Message) { if (!$Condition) { throw "ASSERT: $Message" } }
 function Throws([scriptblock]$Body, [string]$Pattern) {
     $failure = $null
@@ -120,6 +124,7 @@ try {
     $script:failLink = $false
     Install-Badge $null
     Assert ($script:running -and (Test-Path -LiteralPath $script:ConfigPath)) 'install succeeded'
+    Assert (!(Get-AutoUpdateEnabled)) 'first install defaults to disabled updates'
     Assert (!(Test-Path -LiteralPath $script:DesktopLink)) 'no separate desktop launcher created'
     Write-Utf8 $script:DesktopLink (Get-ManagerArguments 'Launch')
     Write-Json (Join-Path $script:InstallRoot 'startup/state.json') @{lastAttemptAt=123;event='attempt'}
@@ -137,6 +142,10 @@ try {
     Assert (!(Test-Path -LiteralPath $script:DesktopLink)) 'owned legacy shortcut removed'
     Assert ((Read-Json (Join-Path $script:InstallRoot 'startup/state.json')).lastAttemptAt -eq 123) 'cooldown receipt retained during upgrade'
     Assert (!(Get-AutoUpdateEnabled)) 'disabled auto update preference survives upgrade'
+    Write-Json (Join-Path $script:InstallRoot 'update-preferences.json') @{Enabled=$true}
+    Install-Badge $null
+    Assert (Get-AutoUpdateEnabled) 'explicit enabled update preference survives upgrade'
+    Write-Json (Join-Path $script:InstallRoot 'update-preferences.json') @{Enabled=$false}
     Assert ((Read-Json (Join-Path $script:InstallRoot 'update-state.json')).checkedAt -eq 123) 'update interval survives upgrade'
     $AutomaticUpdate=$true
     Throws { Install-Badge $null } 'disabled'
@@ -160,3 +169,4 @@ try {
     Assert ($resolved.StartsWith([IO.Path]::GetFullPath([IO.Path]::GetTempPath()),[StringComparison]::OrdinalIgnoreCase) -and (Split-Path -Leaf $resolved) -like 'badge-windows-*') 'cleanup must stay inside fixture root'
     Remove-Item -LiteralPath $resolved -Recurse -Force
 }
+

@@ -1,7 +1,7 @@
 'use strict';
 const assert=require('node:assert/strict');
 const {StartupController}=require('../macos/startup/controller.cjs');
-const app=(key='new',overrides={})=>({key,pid:20,launchedAt:99500,finishedLaunching:true,argumentsKnown:true,debugPort:null,...overrides});
+const app=(key='new',overrides={})=>({key,pid:20,launchedAt:99500,finishedLaunching:true,argumentsKnown:true,plainLaunch:true,debugPort:null,...overrides});
 async function scenario({baseline=[],fresh=[app()],snapshot={},quit=true,exit=true,launch=true,failReceipt=false,lastAttemptAt=0,onSleep,onLaunch,portInUse=false,foreground=20}={},verify) {
   let now=100000, calls=[], records=[], apps=baseline, input='1', frontmost=foreground;
   const adapter={
@@ -20,7 +20,7 @@ async function scenario({baseline=[],fresh=[app()],snapshot={},quit=true,exit=tr
   await scenario({},({calls})=>assert.deepEqual(calls,['quit','launch','show']));
   await scenario({baseline:[app()]},({calls})=>assert.deepEqual(calls,[]));
   for(const snapshot of [{inputIdleMs:100},{frontmostPid:30}])await scenario({snapshot},({calls})=>assert.deepEqual(calls,[]));
-  for(const overrides of [{launchedAt:1000},{launchedAt:101000},{argumentsKnown:false},{debugPort:'39222'},{debugPort:'9222'}])await scenario({fresh:[app('new',overrides)]},({calls})=>assert.deepEqual(calls,[]));
+  for(const overrides of [{launchedAt:1000},{launchedAt:101000},{argumentsKnown:false},{plainLaunch:false},{debugPort:'39222'},{debugPort:'9222'}])await scenario({fresh:[app('new',overrides)]},({calls})=>assert.deepEqual(calls,[]));
   await scenario({fresh:[app(),app('other',{pid:99})]},({calls})=>assert.deepEqual(calls,[]));
   await scenario({lastAttemptAt:99000},({calls})=>assert.deepEqual(calls,[]));
   await scenario({portInUse:true},({calls,records})=>{assert.deepEqual(calls,[]);assert.ok(records.includes('port-in-use'));});
@@ -57,3 +57,4 @@ async function scenario({baseline=[],fresh=[app()],snapshot={},quit=true,exit=tr
   await control.tick();apps=[app()];await control.tick();assert.deepEqual(calls,['quit','launch']);
   console.log('PASS startup guards: existing/old/background/interactive/ambiguous instances, known flags, receipt failure, cooldown, no retry, graceful refusal/timeout, user cancellation, manual reopen, stop and no focus after app switch');
 })().catch(error=>{console.error(error);process.exitCode=1;});
+

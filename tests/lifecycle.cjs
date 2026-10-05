@@ -1,7 +1,8 @@
 // Install and migrate in a disposable home; launchctl, Dock and app activation are isolated.
 const assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path'),vm=require('node:vm');
 const cp=require('node:child_process');
-const root=path.resolve(__dirname,'..'),temp=fs.mkdtempSync(path.join(os.tmpdir(),'badge-install-'));
+const root=path.resolve(__dirname,'..'),temp=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'badge-install-')));
+const runtime=require('../runtime/state.cjs');
 const installDir=path.join(temp,'Library/Application Support/CodexUsageBadge');
 const shortcut=path.join(temp,'Desktop/Codex 用量条.app'),launcher=path.join(temp,'Applications/Codex 用量条.app');
 const jobs=new Set(),messages=[],calls=[];
@@ -33,7 +34,7 @@ const execFileSync=(bin,args,options)=>{
 class FailedSocket{constructor(){this.events={};setImmediate(()=>this.events.error?.());}addEventListener(n,h){this.events[n]=h;}close(){}}
 const sandbox={module:{exports:{}},__dirname:root,process,Buffer,URL,setTimeout,clearTimeout,AbortSignal,WebSocket:FailedSocket,
   console:{log:s=>messages.push(s),warn:s=>messages.push(s)},fetch:async()=>({ok:true,json:async()=>[{type:'page',url:'app://-/index.html',webSocketDebuggerUrl:'ws://127.0.0.1/unreachable'}]}),
-  require:id=>id==='node:fs'?testFs:id==='node:os'?{...os,homedir:()=>temp}:id==='node:child_process'?{...cp,execFileSync}:id==='./agent.cjs'?require('../agent.cjs'):id==='./macos/shortcuts.cjs'?require('../macos/shortcuts.cjs'):id==='./updater/core.cjs'?require('../updater/core.cjs'):require(id)};
+  require:id=>id==='node:fs'?testFs:id==='node:os'?{...os,homedir:()=>temp}:id==='node:child_process'?{...cp,execFileSync}:id==='./agent.cjs'?require('../agent.cjs'):id==='./macos/shortcuts.cjs'?require('../macos/shortcuts.cjs'):id==='./updater/core.cjs'?require('../updater/core.cjs'):id==='./runtime/state.cjs'?{...runtime,atomicWrite(file,data){if(failCopy&&file===path.join(installDir,'startup-helper/bridge')){failCopy=false;throw Error('simulated helper write failure');}return runtime.atomicWrite(file,data);}}:require(id)};
 vm.runInNewContext(fs.readFileSync(path.join(root,'manage.cjs'),'utf8'),sandbox,{filename:'manage.cjs'});
 const manager=sandbox.module.exports;
 (async()=>{try{
@@ -83,3 +84,4 @@ const manager=sandbox.module.exports;
   assert.ok(manager.startupConfig().ProgramArguments.at(-1).endsWith('startup-helper/watch.cjs'));
   console.log('PASS original-icon install, two-service rollback, cooldown preservation, legacy migration, offline uninstall and unrelated shortcut preservation');
 }finally{fs.rmSync(temp,{recursive:true,force:true});}})().catch(e=>{console.error(e);process.exitCode=1;});
+

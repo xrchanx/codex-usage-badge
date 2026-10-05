@@ -30,7 +30,7 @@ const sandbox = {
   refreshThreadTokens: async () => { tokenReads++; }, resolveCodexBin: () => 'fake',
   unavailableValue: current => ({ ...current, stale: true }),
   installUsageBadge: noop, installProjectColors: noop, installProjectSizes: noop, installThreadTokens: noop,
-  buildBootstrapScript: noop, formatRateLimits: noop, mergeRateLimitsResponse: noop, isMainWindow: noop
+  buildBootstrapScript: noop, formatRateLimits: noop, mergeRateLimitsResponse: noop, isMainWindow: noop, validateCdpTarget:noop,validateCdpExpression:noop
 };
 // log() constructs Date; expose both a real constructor and the controlled now().
 sandbox.Date = class extends Date { static now() { return now; } };
@@ -58,3 +58,4 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
     console.log('PASS slow quota startup/refresh do not block five-second Token reads or window scans; no overlapping quota requests; disconnect clears usage');
   } finally { startup.resolve(); refresh.resolve(); await flush(); hooks.SIGTERM?.(); await running; }
 })().catch(error => { console.error(error); process.exitCode = 1; });
+

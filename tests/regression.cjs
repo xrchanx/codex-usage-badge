@@ -2,11 +2,13 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const http = require('node:http');
+const net = require('node:net');
+const runtime = require('../runtime/state.cjs');
 const { spawn } = require('node:child_process');
 const { chromium } = require('playwright');
 const { buildBootstrapScript, formatRateLimits, isMainWindow } = require('../agent.cjs');
 const root = path.resolve(__dirname, '..');
-const temp = fs.mkdtempSync(path.join(require('node:os').tmpdir(),'badge-regression-'));
+const temp = fs.realpathSync(fs.mkdtempSync(path.join(require('node:os').tmpdir(),'badge-regression-')));
 const macManager = process.platform === 'darwin' ? require('../manage.cjs') : null;
 const fixture = `<!doctype html><html class="dark" data-theme="dark"><meta charset="UTF-8"><style>
 *{box-sizing:border-box}body{margin:0;background:#222;color:#ececec;font:14px -apple-system,sans-serif;display:flex;height:100vh}
@@ -166,15 +168,24 @@ async function run() {
       if(!online){res.writeHead(503).end();return;}
       const targets=await(await fetch('http://127.0.0.1:39442/json/list')).json();
       res.setHeader('content-type','application/json');
-      res.end(JSON.stringify(targets.filter(t=>t.type==='page').map(t=>({...t,url:'app://-/index.html'}))));
+      res.end(JSON.stringify(targets.filter(t=>t.type==='page').map(t=>({...t,url:'app://-/index.html',webSocketDebuggerUrl:t.webSocketDebuggerUrl.replace(':39442',':'+port)}))));
     });
-    await new Promise(resolve=>server.listen(39443,'127.0.0.1',resolve));
+    server.on('upgrade',(request,socket,head)=>{
+      const upstream=net.connect(39442,'127.0.0.1',()=>{
+        const headers=Object.entries(request.headers).map(([key,value])=>`${key}: ${key==='host'?'127.0.0.1:39442':value}`).join('\r\n');
+        upstream.write(`${request.method} ${request.url} HTTP/1.1\r\n${headers}\r\n\r\n`);upstream.write(head);socket.pipe(upstream);upstream.pipe(socket);
+      });
+      socket.once('error',()=>upstream.destroy());upstream.once('error',()=>socket.destroy());socket.once('close',()=>upstream.destroy());
+    });
+    const installDir=path.join(temp,'Library/Application Support/CodexUsageBadge');fs.mkdirSync(installDir,{recursive:true,mode:0o700});
+    fs.writeFileSync(path.join(installDir,'.codex-usage-badge-owner'),'local.codexusagebadge.macos');
+    const port=await runtime.withSessionLaunch(installDir,async state=>{await new Promise(resolve=>server.listen(state.port,'127.0.0.1',resolve));return state.port;});
     const fake=path.join(temp,'fake-codex.cjs');
     controls=path.join(temp,'fake-codex-state.json');
     fs.writeFileSync(controls,'{}');
     fs.writeFileSync(fake,`#!${process.execPath}\nconst fs=require('node:fs');const rl=require('node:readline').createInterface({input:process.stdin});rl.on('line',line=>{const m=JSON.parse(line);if(m.id==null)return;const state=JSON.parse(fs.readFileSync(${JSON.stringify(controls)},'utf8'));if(m.method==='account/rateLimits/read'&&state.fail){process.stdout.write(JSON.stringify({id:m.id,error:{message:'simulated quota outage'}})+'\\n');return;}if(m.method==='account/rateLimits/read'&&state.exit)process.exit(1);const result=m.method==='account/rateLimits/read'?${JSON.stringify(plus)}:{};process.stdout.write(JSON.stringify({id:m.id,result})+'\\n');});\n`);
     fs.chmodSync(fake,0o700);
-    child=spawn(process.execPath,[path.join(root,'agent.cjs'),'--port','39443','--codex-bin',fake,'--poll-ms','1000'],{stdio:['ignore','pipe','pipe']});
+    child=spawn(process.execPath,[path.join(root,'agent.cjs'),'--codex-bin',fake,'--poll-ms','1000'],{stdio:['ignore','pipe','pipe'],env:{...process.env,HOME:temp}});
     let output='';child.stdout.on('data',d=>output+=d);child.stderr.on('data',d=>output+=d);
     await page.waitForFunction(()=>window.__codexUsageBadge?.status().rings?.[1].percent===73,{},{timeout:15000});
     online=false;
@@ -206,3 +217,4 @@ async function run() {
   }
 }
 run().catch(error=>{console.error(error);process.exitCode=1;});
+
