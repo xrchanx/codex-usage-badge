@@ -10,7 +10,7 @@
 | High | 自动更新默认开启。两平台改为首次安装和缺少 preference 时关闭，仅显式 UpdatesOn 开启；保留已有明确设置，手动 check/update 不改变 preference。 |
 | High | 固定 CDP 端口与过宽的 target 接受范围。启动时用安全随机数分配 49152–65535 可用端口，处理占用和系统保留端口，插件锁串行化启动；显式绑定 127.0.0.1。私有原子 session state 是唯一端口来源；严格校验 renderer URL、page、ws、loopback、同一 port、target ID/path，禁止 redirects。生产代码无固定 39222。 |
 | High | 两平台的 archive/manifest 检查与缓存目录标准不一致。统一 fork 身份、tag/platform/version/name/size/URL、GitHub digest（如有）、外部和内部 SHA256SUMS、manifest、allowlist/required files；拒绝额外文件、重复、大小写冲突、symlink、traversal、超限 archive/expanded size。缓存移入私有安装目录；校验失败不执行包内代码。 |
-| Medium | 多处状态与日志写入缺少一致的路径/权限保护。增加共享 owner/path/atomic helper，全链拒绝 symlink/junction/reparse 越界，Windows 当前 SID ACL，macOS 0700/0600，随机临时文件；配置、runtime、receipt 和 rollback 写入使用原子替换，Windows shortcut 原子保存。 |
+| Medium | 多处状态与日志写入缺少一致的路径/权限保护。增加共享 owner/path/atomic helper，全链拒绝 symlink/junction/reparse 越界，Windows 当前 SID ACL（仅保留不可避免的 SYSTEM/本机 Administrators 特权主体），macOS 0700/0600，随机临时文件；配置、runtime、receipt 和 rollback 写入使用原子替换，Windows shortcut 原子保存。 |
 | Medium | Runtime.evaluate 接口允许过宽的 expression。限制为固定仓库 bootstrap/helper 和 JSON.stringify 数据更新；不接受任意 CDP method、用户 JavaScript 或远程脚本。移除不必要的 Runtime.enable。 |
 | Medium | 原始子进程/文件系统错误可能进入日志。自动日志改为固定错误信息，不记录原始 stderr、完整 command line、项目路径、账户数据或正文。SQLite symlink/schema 失败不扩大读取范围；文件夹计量拒绝 UNC/device roots 和链接。 |
 | Medium | macOS 启动保护没有排除带特殊参数的实例。控制器和原生 action 边界增加 plain-launch 保护，退出前重新确认唯一实例。Windows 的身份、前台、年龄、输入和正常退出保护继续保留。 |

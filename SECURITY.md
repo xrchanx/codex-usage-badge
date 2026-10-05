@@ -16,7 +16,7 @@ Windows / macOS 自动更新默认关闭。首次安装或旧版缺少 preferenc
 
 CDP 只执行仓库内固定 bootstrap/helper；动态值用 JSON.stringify，未使用 eval(userInput)、new Function 或远程脚本。CDP 本身没有认证，同用户恶意进程仍可发现端口、修改插件文件或抢占监听。随机端口和文件权限降低攻击面，不能构成对同用户代码的安全隔离。Chromium 启动必须释放预留 listener，释放与绑定之间仍存在短暂竞态。
 
-写入限于插件 owned directory 与明确的当前用户启动集成路径。Windows 安装目录使用仅当前 SID 的受保护 ACL；macOS 私有目录 0700、状态 0600。路径全链拒绝 symlink/reparse point，临时文件随机命名，JSON 原子写入。配置、runtime、worker、日志、receipt 和 cache 均不入 release；异常日志不记录原始 app-server 或文件系统错误。Status 为本机诊断可显示安装路径。普通用户权限无法阻止同用户目录替换竞态或有权修改 ACL 的进程。
+写入限于插件 owned directory 与明确的当前用户启动集成路径。Windows 安装目录使用当前 SID 的受保护 ACL，仅保留 Windows 不可避免的 SYSTEM/本机 Administrators 特权主体；macOS 私有目录 0700、状态 0600。路径全链拒绝 symlink/reparse point，临时文件随机命名，JSON 原子写入。配置、runtime、worker、日志、receipt 和 cache 均不入 release；异常日志不记录原始 app-server 或文件系统错误。Status 为本机诊断可显示安装路径。普通用户权限无法阻止同用户目录替换竞态或有权修改 ACL 的进程。
 
 发布包使用文件白名单构建，并检查凭据、个人路径与数据文件。只包含项目代码、自行编译的启动助手、文档、封面和校验清单，不包含客户端二进制或用户数据。
 

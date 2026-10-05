@@ -51,7 +51,9 @@ function assertPrivate(file){
   }
   const stamp=`${stat.ino}:${stat.ctimeMs}`;
   if(checkedPermissions.get(file)===stamp)return;
-  const script='$ErrorActionPreference="Stop"; $p=$env:CODEX_BADGE_OWNED_DIR; $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value; $acl=if([IO.Directory]::Exists($p)){[IO.Directory]::GetAccessControl($p)}else{[IO.File]::GetAccessControl($p)}; if($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $sid){throw "Owner mismatch"}; foreach($rule in $acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])){if($rule.AccessControlType -eq "Allow" -and $rule.IdentityReference.Value -ne $sid){throw "Public runtime access"}}';
+  // Windows hosted profiles may retain SYSTEM/Administrators as privileged
+  // principals. Ordinary access by another user remains rejected.
+  const script='$ErrorActionPreference="Stop"; $p=$env:CODEX_BADGE_OWNED_DIR; $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value; $allowed=@($sid,"S-1-5-18","S-1-5-32-544"); $acl=if([IO.Directory]::Exists($p)){[IO.Directory]::GetAccessControl($p)}else{[IO.File]::GetAccessControl($p)}; if($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $sid){throw "Owner mismatch"}; foreach($rule in $acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])){if($rule.AccessControlType -eq "Allow" -and $allowed -notcontains $rule.IdentityReference.Value){throw "Public runtime access"}}';
   try{require('node:child_process').execFileSync(path.join(process.env.SystemRoot,'System32/WindowsPowerShell/v1.0/powershell.exe'),['-NoProfile','-NonInteractive','-Command',script],{windowsHide:true,stdio:'pipe',env:{...process.env,CODEX_BADGE_OWNED_DIR:file}});}
   catch{throw Error('Runtime permissions are not private');}
   checkedPermissions.set(file,stamp);
