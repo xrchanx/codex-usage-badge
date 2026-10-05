@@ -10,6 +10,8 @@ if ($tokens | Where-Object { $_.Kind.ToString() -in @('QuestionQuestion','Questi
 . $manager -Action Functions
 if ($env:OS -ne 'Windows_NT') {
     # This suite mocks Windows integration on macOS; native ACLs are verified on Windows.
+    # macOS file attributes are not NTFS reparse metadata; keep only path parsing here.
+    function Assert-SafePath([string]$Path) { [void][IO.Path]::GetFullPath($Path) }
     function Set-PrivateDirectory([string]$Path) { Assert-SafePath $Path; [void][IO.Directory]::CreateDirectory($Path) }
 }
 function Assert($Condition, [string]$Message) { if (!$Condition) { throw "ASSERT: $Message" } }
