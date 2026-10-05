@@ -2,6 +2,10 @@ $ErrorActionPreference='Stop'
 $root=Split-Path -Parent $PSScriptRoot
 $releaseVersion=(Get-Content -LiteralPath (Join-Path $root 'package.json') -Raw | ConvertFrom-Json).windowsVersion
 . (Join-Path $root 'windows/update-windows.ps1') -Functions
+if ($env:OS -ne 'Windows_NT') {
+    # macOS file attributes are not NTFS reparse metadata; native Windows tests cover that check.
+    function Assert-UpdatePath([string]$File) { [void][IO.Path]::GetFullPath($File) }
+}
 $archive=Join-Path $root ('dist/CodexUsageBadge-Windows-'+$releaseVersion+'.zip')
 function Assert($Condition,[string]$Message) { if(!$Condition) { throw $Message } }
 function Reject([string]$File,[string]$Pattern) {
