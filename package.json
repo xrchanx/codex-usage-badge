@@ -9,11 +9,12 @@
     "node": ">=24"
   },
   "scripts": {
-    "build": "python3 build.py",
+    "build": "node scripts/run_python.cjs build.py",
     "test": "node tests/run.cjs",
-    "test:privacy": "python3 scripts/audit_release.py"
+    "test:privacy": "node scripts/run_python.cjs scripts/audit_release.py"
   },
   "devDependencies": {
     "playwright": "1.63.0"
   }
 }
+

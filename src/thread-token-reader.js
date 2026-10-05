@@ -15,8 +15,11 @@ class ThreadTokenReader {
       const file = fs.readdirSync(this.home).filter(name => /^state_\d+\.sqlite$/.test(name))
         .sort((a, b) => Number(b.match(/\d+/)[0]) - Number(a.match(/\d+/)[0]))[0];
       if (!file) return { ok: false, totals, checkedAt };
+      const databasePath = path.join(this.home, file);
+      const stat = fs.lstatSync(databasePath);
+      if (!stat.isFile() || stat.isSymbolicLink()) return { ok: false, totals, checkedAt };
       const { DatabaseSync } = require('node:sqlite');
-      db = new DatabaseSync(path.join(this.home, file), { readOnly: true, timeout: 200 });
+      db = new DatabaseSync(databasePath, { readOnly: true, timeout: 200 });
       // These are the only two fields read: no titles, messages, auth, or conversation bodies.
       for (let i = 0; i < requested.length; i += 200) {
         const chunk = requested.slice(i, i + 200);
@@ -45,3 +48,4 @@ async function refreshThreadTokens(injector, reader) {
     try { await session.evaluate(`window.__codexThreadTokens?.update(${JSON.stringify({ ...snapshot, totals })})`); } catch {}
   }));
 }
+

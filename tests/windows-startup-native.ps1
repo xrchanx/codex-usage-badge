@@ -7,6 +7,7 @@ $temp=Join-Path ([IO.Path]::GetTempPath()) ('badge-startup-native-'+[guid]::NewG
 $fixture=Join-Path $temp 'Codex.exe'
 $child=$null
 $testFailure=$null
+$testPort=Get-Random -Minimum 49152 -Maximum 65536
 function Assert($condition,$message) { if(!$condition) { throw $message } }
 function Stop-Fixture {
     [IO.File]::WriteAllText((Join-Path $temp 'stop'),'stop')
@@ -60,9 +61,9 @@ public class StartupFixture : Form {
     Assert ($meaningful.Invoke($null,@([uint32]1,[uint16]0))) 'Typing must protect active work'
     Assert (!$meaningful.Invoke($null,@([uint32]1,[uint16]1))) 'Launch key release must not cancel startup'
     Assert (([CodexUsageBadge.Startup.Native]::TakeSnapshot()).inputStamp -ne 'unknown') 'Raw Input monitor must be running'
-    Start-Fixture '--remote-debugging-port=39222'
+    Start-Fixture ("--remote-debugging-port=$testPort")
     $snapshot=[CodexUsageBadge.Startup.Native]::TakeSnapshot()
-    Assert ($snapshot.apps.Count -eq 1 -and $snapshot.apps[0].debugPort -eq '39222') 'Actual Windows argument inspection'
+    Assert ($snapshot.apps.Count -eq 1 -and $snapshot.apps[0].debugPort -eq [string]$testPort) 'Actual Windows argument inspection'
     Assert (!$snapshot.apps[0].plainLaunch) 'Custom arguments must not be dropped by restart'
     $reply=[CodexUsageBadge.Startup.Native]::Quit($child.Id,'wrong-identity',$snapshot.inputStamp)
     Assert (!$reply.accepted -and !$child.HasExited) 'Invalid identity guard'
@@ -87,10 +88,10 @@ public class StartupFixture : Form {
     Assert (!(Test-Path -LiteralPath (Join-Path $temp 'ended'))) 'Refusal must not become a forced end-session'
     Stop-Fixture
     $snapshot=[CodexUsageBadge.Startup.Native]::TakeSnapshot()
-    $reply=[CodexUsageBadge.Startup.Native]::Launch('invalid-input-stamp',$snapshot.frontmostPid)
+    $reply=[CodexUsageBadge.Startup.Native]::Launch('invalid-input-stamp',$snapshot.frontmostPid,$testPort)
     Assert (!$reply.launched) 'Changed input must cancel reopen'
     [IO.File]::WriteAllText((Join-Path $temp 'watcher-stop'),'stop')
-    $reply=[CodexUsageBadge.Startup.Native]::Launch($snapshot.inputStamp,$snapshot.frontmostPid)
+    $reply=[CodexUsageBadge.Startup.Native]::Launch($snapshot.inputStamp,$snapshot.frontmostPid,$testPort)
     Assert (!$reply.launched) 'Stop file must cancel reopen'
     Remove-Item -LiteralPath (Join-Path $temp 'watcher-stop')
     Remove-Item -LiteralPath (Join-Path $temp 'stop')
@@ -99,18 +100,18 @@ public class StartupFixture : Form {
     $idField.SetValue($null,('CodexUsageBadgeMissing_'+[guid]::NewGuid().ToString('N')+'!App'))
     $startMethod=[CodexUsageBadge.Startup.Native].GetMethod('StartApplication',[Reflection.BindingFlags]'NonPublic,Static')
     $activationFailed=$false
-    try { $startMethod.Invoke($null,@()) | Out-Null } catch { $activationFailed=$true }
+    try { $startMethod.Invoke($null,@([int]$testPort)) | Out-Null } catch { $activationFailed=$true }
     Assert $activationFailed 'Invalid Store identity must fail activation'
     Assert (([CodexUsageBadge.Startup.Native]::TakeSnapshot()).apps.Count -eq 0) 'Store activation failure must not fall back to an executable'
     $idField.SetValue($null,$null)
     # This fixture overrides SetVisibleCore, so the native launch cannot display a window.
     $snapshot=[CodexUsageBadge.Startup.Native]::TakeSnapshot()
-    $reply=[CodexUsageBadge.Startup.Native]::Launch($snapshot.inputStamp,$snapshot.frontmostPid)
+    $reply=[CodexUsageBadge.Startup.Native]::Launch($snapshot.inputStamp,$snapshot.frontmostPid,$testPort)
     Assert $reply.launched 'Hidden native reopen failed (do not interact during test)'
     $child=[Diagnostics.Process]::GetProcessById($reply.pid)
     $snapshot=[CodexUsageBadge.Startup.Native]::TakeSnapshot()
-    Assert ($snapshot.apps.Count -eq 1 -and $snapshot.apps[0].key -eq $reply.key -and $snapshot.apps[0].debugPort -eq '39222') 'Relaunch must return correct process identity and debugging flags'
-    $shown=[CodexUsageBadge.Startup.Native]::Show($reply.pid,$reply.key,'invalid-input-stamp',$snapshot.frontmostPid)
+    Assert ($snapshot.apps.Count -eq 1 -and $snapshot.apps[0].key -eq $reply.key -and $snapshot.apps[0].debugPort -eq [string]$testPort) 'Relaunch must return correct process identity and debugging flags'
+    $shown=[CodexUsageBadge.Startup.Native]::Show($reply.pid,$reply.key,'invalid-input-stamp',$snapshot.frontmostPid,$testPort)
     Assert (!$shown.shown) 'Changed input must prevent showing a replacement'
     Stop-Fixture
     Write-Host 'PASS native process identity/arguments, background guards, normal OS shutdown, refusal, hidden relaunch, input cancellation and stop guard'
@@ -132,3 +133,4 @@ public class StartupFixture : Form {
     }
 }
 if($testFailure) { throw $testFailure }
+

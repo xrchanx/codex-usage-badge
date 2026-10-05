@@ -1,7 +1,7 @@
 'use strict';
 const fs=require('node:fs');
 const path=require('node:path');
-const net=require('node:net');
+const runtime=require('../runtime/state.cjs');
 const {spawn}=require('node:child_process');
 const readline=require('node:readline');
 const {StartupController}=require('./controller.cjs');
@@ -42,25 +42,20 @@ class NativeBridge {
   close() {this.fail(Error('Startup watcher stopped'));this.child.stdin.end();this.lines.close();}
 }
 function portInUse() {
-  return new Promise(resolve=>{
-    const socket=net.createConnection({host:'127.0.0.1',port:39222});
-    const done=value=>{socket.destroy();resolve(value);};
-    socket.once('connect',()=>done(true));socket.once('error',error=>done(error.code!=='ECONNREFUSED'));
-    socket.setTimeout(350,()=>done(true));
-  });
+  return runtime.reservePort().then(async reservation=>{await reservation.release();return false;},()=>true);
 }
 function readReceipt(file) {
+  runtime.assertNoLinks(file);
   let state={};try{state=JSON.parse(fs.readFileSync(file,'utf8'));}catch(error){if(error.code!=='ENOENT')throw error;}
   if(!Number.isFinite(state.lastAttemptAt??0)||(state.lastAttemptAt??0)<0)throw Error('Invalid startup receipt');
   return state;
 }
 function writeReceipt(file,state) {
-  const temp=file+'.tmp';const fd=fs.openSync(temp,'w',0o600);
-  try{fs.writeFileSync(fd,JSON.stringify(state,null,2)+'\n');fs.fsyncSync(fd);}finally{fs.closeSync(fd);}
-  fs.renameSync(temp,file);
+  runtime.writeJson(file,state);
 }
 async function main() {
   const root=path.dirname(__dirname),receipt=path.join(__dirname,'state.json');
+  runtime.assertOwned(root);runtime.assertNoLinks(path.join(root,'config.json'));
   const config=JSON.parse(fs.readFileSync(path.join(root,'config.json'),'utf8'));
   const stopFile=process.env.CODEX_BADGE_STOP_FILE||path.join(root,'stop.request');
   let state=readReceipt(receipt),stopped=false,timer;
@@ -68,8 +63,8 @@ async function main() {
   const adapter={
     snapshot:()=>bridge.call('snapshot'),portInUse,
     quit:(app,stamp)=>bridge.call('quit',{pid:app.pid,key:app.key,stamp}),
-    launch:async(stamp,foreground)=>await portInUse()?{launched:false}:bridge.call('launch',{stamp,foreground}),
-    show:(app,stamp,foreground)=>bridge.call('show',{pid:app.pid,key:app.key,stamp,foreground}),
+    launch:(stamp,foreground)=>runtime.withSessionLaunch(root,state=>bridge.call('launch',{stamp,foreground,port:state.port})),
+    show:(app,stamp,foreground)=>bridge.call('show',{pid:app.pid,key:app.key,stamp,foreground,port:runtime.readSession(root).port}),
     async record(event,details={}) {
       const {message,reason,errorCode,processCount,rebootReason,shown,ageMs,inputIdleMs,frontmostPid,...previous}=state;
       state={...previous,...details,event,nativePid:bridge.child.pid,updatedAt:Date.now()};
@@ -96,4 +91,5 @@ async function main() {
   await tick();
 }
 module.exports={NativeBridge,portInUse,readReceipt,writeReceipt};
-if(require.main===module)main().catch(error=>{console.error(error.message);process.exitCode=1;});
+if(require.main===module)main().catch(()=>{console.error('Safe startup unavailable');process.exitCode=1;});
+

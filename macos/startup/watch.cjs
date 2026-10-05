@@ -1,17 +1,20 @@
 'use strict';
 const fs=require('node:fs');
 const path=require('node:path');
-const net=require('node:net');
+const runtime=require('../runtime/state.cjs');
 const {execFile,spawn}=require('node:child_process');
 const {promisify}=require('node:util');
 const readline=require('node:readline');
 const {StartupController}=require('./controller.cjs');
 const run=promisify(execFile);
 const root=__dirname;
+const installDir=path.dirname(root);
+runtime.assertOwned(installDir);runtime.assertNoLinks(path.join(root,'settings.json'));
 const config=JSON.parse(fs.readFileSync(path.join(root,'settings.json'),'utf8'));
+if(config.owner!=='codex-usage-badge-startup-v1')throw Error('Startup owner marker mismatch');
 const receipt=path.join(root,'state.json');
 let state={};
-try { state=JSON.parse(fs.readFileSync(receipt,'utf8')); } catch(error) { if(error.code!=='ENOENT')throw error; }
+try { runtime.assertNoLinks(receipt);state=JSON.parse(fs.readFileSync(receipt,'utf8')); } catch(error) { if(error.code!=='ENOENT')throw error; }
 if(!Number.isFinite(state.lastAttemptAt??0))throw Error('Invalid startup receipt');
 const abort=new AbortController();
 async function native(action,...args) {
@@ -21,20 +24,12 @@ async function native(action,...args) {
 const adapter={
   snapshot:()=>native('snapshot'),
   quit:(app,stamp)=>native('quit',app.pid,app.key,stamp),
-  launch:(stamp,frontmost)=>native('launch',stamp,frontmost),
-  show:(app,stamp,frontmost)=>native('show',app.pid,app.key,stamp,frontmost),
-  portInUse:()=>new Promise(resolve=>{
-    const socket=net.createConnection({host:'127.0.0.1',port:39222});
-    const done=value=>{socket.destroy();resolve(value);};
-    socket.once('connect',()=>done(true));
-    socket.once('error',error=>done(error.code!=='ECONNREFUSED'));
-    socket.setTimeout(350,()=>done(true));
-  }),
+  launch:(stamp,frontmost)=>runtime.withSessionLaunch(installDir,state=>native('launch',stamp,frontmost,state.port)),
+  show:(app,stamp,frontmost)=>native('show',app.pid,app.key,stamp,frontmost,runtime.readSession(installDir).port),
+  portInUse:()=>runtime.reservePort().then(async reservation=>{await reservation.release();return false;},()=>true),
   async record(event,details={}) {
     state={...state,...details,event,updatedAt:Date.now()};
-    const temp=receipt+'.tmp';
-    fs.writeFileSync(temp,JSON.stringify(state,null,2)+'\n',{mode:0o600});
-    fs.renameSync(temp,receipt);
+    runtime.writeJson(receipt,state);
     console.log(new Date().toISOString(),event);
   }
 };
@@ -70,3 +65,4 @@ function shutdown(code=0) {
   process.exit(code);
 }
 process.once('SIGTERM',()=>shutdown());process.once('SIGINT',()=>shutdown());
+

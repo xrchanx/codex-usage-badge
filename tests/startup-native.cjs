@@ -5,6 +5,7 @@ const assert=require('node:assert/strict');
 const {execFile,spawn}=require('node:child_process');
 const {promisify}=require('node:util');
 const readline=require('node:readline');
+const runtime=require('../runtime/state.cjs');
 const run=promisify(execFile);
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const bridge=process.argv[2];
@@ -24,13 +25,14 @@ async function waitUntil(test){for(let i=0;i<50;i++){if(test())return;await slee
   readline.createInterface({input:observer.stdout}).on('line',line=>events.push(JSON.parse(line)));
   await waitUntil(()=>events.length>0);
   const initial=await call('snapshot');assert.equal(initial.apps.length,0);
-  const opened=await call('launch',initial.inputStamp,initial.frontmostPid);
+  const reserved=await runtime.reservePort(),port=reserved.port;await reserved.release();
+  const opened=await call('launch',initial.inputStamp,initial.frontmostPid,port);
   assert.equal(opened.launched,true,'Input changed during test or native launch failed');childPid=opened.pid;
   await waitUntil(()=>events.some(e=>e.apps.some(a=>a.pid===childPid)));
   const current=await call('snapshot');assert.equal(current.apps.length,1);
-  assert.equal(current.apps[0].debugPort,'39222');assert.equal(current.apps[0].key,opened.key);
+  assert.equal(current.apps[0].debugPort,String(port));assert.equal(current.apps[0].key,opened.key);
   assert.equal(current.frontmostPid,initial.frontmostPid,'Hidden launch must not steal focus');
-  assert.equal((await call('show',childPid,opened.key,'invalid-input-stamp',initial.frontmostPid)).shown,false);
+  assert.equal((await call('show',childPid,opened.key,'invalid-input-stamp',initial.frontmostPid,port)).shown,false);
   assert.equal((await call('quit',childPid,opened.key,current.inputStamp)).accepted,false,'Background debugging fixture must not be restarted');
   const beforeExit=events.length;
   process.kill(childPid,'SIGTERM');childPid=null;
@@ -41,3 +43,4 @@ async function waitUntil(test){for(let i=0;i<50;i++){if(test())return;await slee
   if(childPid)try{process.kill(childPid,'SIGTERM');}catch{}
   observer?.kill('SIGTERM');await sleep(200);fs.rmSync(root,{recursive:true,force:true});
 });
+

@@ -9,7 +9,7 @@ class AppServerClient extends require('node:events').EventEmitter {
     this.child=child;
     const fail=error=>{
       if (this.child!==child) return;
-      this.stop(); this.emit('server-exit',error);
+      this.stop(); this.emit('server-exit',new Error('App Server connection closed'));
     };
     child.once('error',fail);
     child.once('exit',(code)=>fail(new Error(`App Server exited (${code})`)));
@@ -22,7 +22,7 @@ class AppServerClient extends require('node:events').EventEmitter {
       const request=this.pending.get(message.id);
       if (request) {
         this.pending.delete(message.id); clearTimeout(request.timer);
-        message.error ? request.reject(new Error(message.error.message || 'App Server request failed')) : request.resolve(message.result);
+        message.error ? request.reject(new Error('App Server request failed')) : request.resolve(message.result);
       } else if(message.method==='account/rateLimits/updated') {
         this.rateLimits=mergeRateLimitsResponse(this.rateLimits,message.params);
         this.emit('rate-limits',this.rateLimits);
@@ -39,7 +39,7 @@ class AppServerClient extends require('node:events').EventEmitter {
       const timer=setTimeout(()=>{this.pending.delete(id);reject(new Error(`${method} timed out`));},this.requestTimeoutMs);
       this.pending.set(id,{resolve,reject,timer});
       this.child.stdin.write(JSON.stringify({id,method,...(params===undefined?{}:{params})})+'\n',error=>{
-        if(error && this.pending.delete(id)){clearTimeout(timer);reject(error);}
+        if(error && this.pending.delete(id)){clearTimeout(timer);reject(new Error('App Server write failed'));}
       });
     });
   }
@@ -55,3 +55,4 @@ class AppServerClient extends require('node:events').EventEmitter {
     this.pending.clear();
   }
 }
+

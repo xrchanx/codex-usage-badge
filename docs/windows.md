@@ -25,9 +25,9 @@ Windows 通过 Raw Input 观察实际操作：点击、滚轮或按键会取消�
 
 ## 自动更新（Windows 0.10.1 起）
 
-安装后默认开启。后台首次启动约 30 秒后检查 GitHub，之后每 6 小时检查一次；Windows 登录后台需要保持启用。只下载本仓库已发布且版本更高的 Windows Release，不使用 macOS 发布包或仅推送的源码提交。
+安装后默认关闭。只有显式运行 `UpdatesOn.cmd` 或 `-Action UpdatesOn` 后，后台才在启动约 30 秒后及每 6 小时检查 GitHub。只信任 `xrchanx/codex-usage-badge` 已发布且版本更高的 Windows Release。
 
-下载会核对发布页的 SHA-256 清单和 GitHub 资产摘要（如有），再验证 ZIP 内的每个文件及路径。安装沿用目录替换和失败回滚，保留自定义路径、更新开关和加载记录。更新过程只替换插件后台，Codex 窗口保持打开；下载失败会在下一个检查周期重试。`Status.cmd` 可查看更新结果；双击 `Update.cmd` 可立即手动检查，即使自动更新已关闭。
+下载核对外部 SHA-256 清单和 GitHub 资产摘要（如有），再验证内部 manifest、每个文件和严格白名单，拒绝额外文件、路径穿越、链接、重名及超限 ZIP。安装沿用目录替换和失败回滚，保留自定义路径、更新开关和加载记录。`CheckUpdate.cmd` 只检查，`Update.cmd` 手动安装；两者在自动更新关闭时也可使用，不改变开关。
 
 v0.10.0 及更早版本没有更新器，需要先手动安装一次 v0.10.1 或更新版本，之后才能自动升级。
 
@@ -37,7 +37,11 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\Codex
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\CodexUsageBadge\manage-windows.ps1" -Action UpdatesOn
 ```
 
-也可首次安装时使用 `-Action Install -DisableAutoUpdate`。更新偏好记录在安装目录的 `update-preferences.json`，检查结果记录在 `update-state.json`。
+首次安装不需要额外参数即可关闭自动更新；已有明确布尔设置随升级保留，缺少设置时默认关闭。更新偏好记录在安装目录的 `update-preferences.json`，检查结果记录在 `update-state.json`。
+
+每次 Codex 带调试参数启动时，随机选择可用高位端口 49152–65535，仅绑定 `127.0.0.1`。私有 `runtime/cdp-session.json` 保存当前 session，agent / bridge 只连接该端口和官方 `app://-/index.html` page target。安装目录与状态限制为当前用户，拒绝 reparse point 路径，状态原子写入；不使用管理员权限、Windows Service、Scheduled Task 或 HKLM。
+
+插件不读取 `auth.json`、Cookie、登录 token 或聊天正文。Token 数据库只读 `id` 和 `tokens_used`。网络只用于官方本机 app-server、loopback CDP，以及手动更新或显式开启后访问 fork GitHub API / Release asset；无遥测或第三方服务。
 
 发布新 Windows 版本时，同步修改 `package.json` 的 `windowsVersion` 和 `windows/manage-windows.ps1` 的版本号，然后运行 `python scripts/build_release.py --platform Windows`。在 GitHub 创建标签为 `v版本号-windows` 的 Release，上传生成的 `CodexUsageBadge-Windows-版本号.zip` 和同一批生成的 `SHA256SUMS.txt`，最后发布。更新器也接受该命名规则下的预发布 Release；草稿不会触发更新。
 
@@ -64,3 +68,4 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\manage-windows.ps1 -Ac
 卸载时若客户端可连接，立即移除界面组件并清理颜色设置；否则组件会在下次完全重启后消失，颜色配置可能保留在客户端存储中。备份目录名以 `CodexUsageBadge.backup-` 或 `.uninstalled-` 开头，由用户自行决定何时删除。
 
 CI 使用临时应用验证 Windows 进程、快捷方式迁移、后台停止、安装回滚、正常系统退出和拒绝退出。启动助手使用 Restart Manager 的非强制退出请求；应用可通过 Windows 的退出询问拒绝，不发送全局快捷键。Windows 可能拒绝后台进程恢复焦点，此时不会强行抢占焦点。长期焦点行为仍需更多设备验证。
+

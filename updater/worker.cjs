@@ -7,6 +7,7 @@ const installDir=path.resolve(__dirname,'..');
 const cacheDir=path.join(os.homedir(),'Library/Caches/CodexUsageBadge-updates');
 async function main(args=process.argv.slice(2)){
   if(process.platform!=='darwin')throw Error('此更新器仅供 macOS 使用');
+  require('../runtime/state.cjs').assertOwned(installDir);
   const mode=args[0]||'run';
   if(['enable','disable'].includes(mode)){
     const file=path.join(installDir,'update-settings.json'),settings=readJson(file);
@@ -16,15 +17,15 @@ async function main(args=process.argv.slice(2)){
   if(mode==='status'){
     console.log(JSON.stringify({settings:readJson(path.join(installDir,'update-settings.json')),status:readJson(path.join(cacheDir,'state.json'))},null,2));return;
   }
-  if(!['run','check'].includes(mode))throw Error('未知更新操作');
+  if(!['run','check','update'].includes(mode))throw Error('未知更新操作');
   if(fs.existsSync(cacheDir)&&fs.lstatSync(cacheDir).isSymbolicLink())throw Error('更新目录不能是链接');
   const controller=new AbortController();
   const stop=()=>controller.abort();process.once('SIGTERM',stop);process.once('SIGINT',stop);
   try{
     if(mode==='run')await require('node:timers/promises').setTimeout(30000,null,{signal:controller.signal});
-    const result=await updateOnce({installDir,cacheDir,signal:controller.signal,force:mode==='check',checkOnly:mode==='check',
+    const result=await updateOnce({installDir,cacheDir,signal:controller.signal,force:mode!=='run',checkOnly:mode==='check',
       install:async(stage,current)=>{
-        await execFile(process.execPath,[path.join(stage,'manage.cjs'),'install','--from-update'],{
+        await execFile(process.execPath,[path.join(stage,'manage.cjs'),'install','--from-update',...(mode==='update'?['--force-update']:[])],{
           env:{...process.env,CODEX_BADGE_APP:current.app,CODEX_HOME:current.codexHome||''},maxBuffer:1024*1024,windowsHide:true
         });
       }});
@@ -36,4 +37,5 @@ async function main(args=process.argv.slice(2)){
   }finally{process.removeListener('SIGTERM',stop);process.removeListener('SIGINT',stop);}
 }
 module.exports={main};
-if(require.main===module)main().catch(error=>{console.error('自动更新暂不可用：'+error.message);process.exitCode=1;});
+if(require.main===module)main().catch(error=>{console.error('自动更新暂不可用：请求、校验或安装未完成。');process.exitCode=1;});
+

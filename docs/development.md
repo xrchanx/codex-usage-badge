@@ -13,11 +13,12 @@
 开发环境：Node.js 24+、Python 3.10+。macOS 原生助手由 Xcode Command Line Tools 编译为 arm64 / x86_64 通用程序；普通用户使用安装包中的成品，无需编译。
 
 ```bash
-npm ci
+npm ci --ignore-scripts
 npx playwright install chromium --only-shell
 python3 scripts/build_release.py
 npm test
 npm run test:privacy
+python3 tests/release-security.py
 ```
 
 macOS 额外运行原生测试：
@@ -34,6 +35,8 @@ Windows 启动适配器测试：`powershell -NoProfile -ExecutionPolicy Bypass -
 
 `build_release.py` 在 macOS 生成两个平台的 ZIP，在 Windows 生成 Windows ZIP。文件输出到 `dist/`，附带 SHA256 校验清单。发布前将本次源码加入 Git 暂存区，再执行隐私检查；检查覆盖所有受跟踪源码和安装包。
 
+发布目标固定为 `xrchanx/codex-usage-badge`，不得将原作者 Release 用作更新来源。默认更新关闭；测试使用临时 owned-directory/session 与隐藏合成应用，不连接真实客户端。Windows 可以通过 `PLAYWRIGHT_EXECUTABLE_PATH` 指定已安装的 Chrome/Chromium；无需下载浏览器也能运行 UI 测试。macOS 原生构建与安装回滚必须在真实 macOS runner 验证。
+
 ## 数据与兼容性
 
 额度来自客户端 CLI 的账号接口。Plus 显示短周期与每周额度，Pro 显示周额度；大于 50% 为绿、10%～50% 为黄、小于 10% 为红。
@@ -43,3 +46,4 @@ Token 读取本机会话数据库中的累计值，包含缓存输入，不代�
 项目容量按本机项目路径计算，macOS 使用目录占用统计；默认两路并发，缓存 5 分钟，单项目计算最多 3 分钟。不可访问的目录显示 `—`，不以不完整结果冒充完整容量。
 
 插件依赖客户端内部界面和调试接口。自动化测试使用临时目录、模拟页面与独立测试应用，不读取真实账号。macOS 自动加载已完成本机真实客户端重启验证；Windows 安装流程由 CI 验证，已登录客户端的长期兼容性仍需更多设备反馈。
+

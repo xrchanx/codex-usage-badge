@@ -5,7 +5,7 @@ function measureDirectory(root, { timeoutMs = 180000, signal } = {}) {
     const { spawn } = require('node:child_process');
     const command = process.platform === 'darwin' ? '/usr/bin/du' : 'du';
     const child = spawn(command, ['-sk', root], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
-    let stdout = '', stderr = '', settled = false;
+    let stdout = '', settled = false;
     const finish = (error, bytes) => {
       if (settled) return; settled = true; clearTimeout(timer);
       signal?.removeEventListener('abort', cancel);
@@ -16,8 +16,8 @@ function measureDirectory(root, { timeoutMs = 180000, signal } = {}) {
     signal?.addEventListener('abort', cancel, {once: true});
     child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
     child.stdout.on('data', chunk => { if (stdout.length < 65536) stdout += chunk; });
-    child.stderr.on('data', chunk => { if (stderr.length < 4096) stderr += chunk; });
-    child.once('error', error => finish(error));
+    child.stderr.resume(); // Do not retain filesystem paths or user data in diagnostic output.
+    child.once('error', () => finish(new Error('无法计算文件夹占用，请检查路径和访问权限')));
     child.once('close', code => {
       const match = /^\s*(\d+)/.exec(stdout);
       const kib = match ? Number(match[1]) : NaN;
@@ -36,14 +36,16 @@ async function measureDirectoryPortable(root, { timeoutMs = 180000, signal } = {
     signal?.throwIfAborted();
     if (Date.now() > deadline) throw new Error('计算超时');
     const current = queue.pop();
+    const currentStat = await fs.lstat(current);
+    if (!currentStat.isDirectory() || currentStat.isSymbolicLink()) throw new Error('项目路径不可用');
     let entries;
     entries = await fs.readdir(current, { withFileTypes: true });
     for (const entry of entries) {
       const file = require('node:path').join(current, entry.name);
       if (entry.isDirectory()) queue.push(file);
       else if (entry.isFile()) {
-        const stat = await fs.stat(file);
-        if (Number.isSafeInteger(stat.size) && stat.size >= 0) bytes += stat.size;
+        const stat = await fs.lstat(file);
+        if (stat.isFile() && !stat.isSymbolicLink() && Number.isSafeInteger(stat.size) && stat.size >= 0) bytes += stat.size;
       }
     }
   }
@@ -86,7 +88,7 @@ class ProjectSizeScanner {
       const id = project?.id;
       if (typeof id !== 'string' || !id || id.length > 512 || seen.has(id)) continue;
       seen.add(id);
-      const roots = [...new Set((Array.isArray(project.roots) ? project.roots : []).filter(root => typeof root === 'string' && root.length <= 4096 && path.isAbsolute(root)).slice(0, 8))].sort();
+      const roots = [...new Set((Array.isArray(project.roots) ? project.roots : []).filter(root => typeof root === 'string' && root.length <= 4096 && !root.includes('\0') && !/^[\\/]{2}/.test(root) && path.isAbsolute(root)).slice(0, 8))].sort();
       result.push({ id, roots, key: roots.join('\0') });
     }
     return result;
@@ -119,8 +121,8 @@ class ProjectSizeScanner {
       }).then(bytes => {
         if (!Number.isSafeInteger(bytes) || bytes < 0) throw new Error('文件夹大小无效');
         if (!this.stopped) this.cache.set(job.key, { state: 'ready', bytes, scannedAt: this.now() });
-      }).catch(error => {
-        if (!this.stopped) this.cache.set(job.key, { state: 'error', message: error?.message || '计算失败', scannedAt: this.now() });
+      }).catch(() => {
+        if (!this.stopped) this.cache.set(job.key, { state: 'error', message: '无法计算文件夹占用，请检查路径和访问权限', scannedAt: this.now() });
       }).finally(() => {
         this.controllers.delete(controller);
         this.running--; this.pending.delete(job.key);
@@ -159,3 +161,4 @@ async function refreshProjectSizes(injector, scanner) {
     try { await session.evaluate(`window.__codexProjectSizes?.update(${JSON.stringify(scanner.snapshot(projects))})`); } catch {}
   }));
 }
+

@@ -81,8 +81,9 @@ class StartupController {
       const shown=await this.adapter.show(opened,snapshot.inputStamp,beforeLaunch.frontmostPid);
       await this.adapter.record('reopened',{shown:!!shown.shown,processKey:opened.key});
     } catch(error) {
-      await this.adapter.record('error',{message:error.message}).catch(()=>{});
+      await this.adapter.record('error',{message:'Startup action failed'}).catch(()=>{});
     } finally { this.busy=false; }
   }
 }
 module.exports={StartupController};
+

@@ -33,7 +33,7 @@ try {
     RendererInjector:class {constructor(){this.sessions=new Map();}async scan(){} stop(){stopped++;}},
     AppServerClient:class{},ThreadTokenReader:class{},refreshThreadTokens:async()=>{},resolveCodexBin:()=> 'fixture',
     unavailableValue:v=>v,installUsageBadge:noop,installProjectColors:noop,installThreadTokens:noop,installProjectSizes:noop,ProjectSizeScanner:class{stop(){}},refreshProjectSizes:noop,measureDirectory:noop,measureDirectoryPortable:noop,measureProjectRoots:noop,
-    buildBootstrapScript:noop,formatRateLimits:noop,mergeRateLimitsResponse:noop,isMainWindow:noop
+    buildBootstrapScript:noop,formatRateLimits:noop,mergeRateLimitsResponse:noop,isMainWindow:noop,validateCdpTarget:noop,validateCdpExpression:noop
   };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../src/agent-main.js'),'utf8'),sandbox);
   await sandbox.module.exports.main();
@@ -43,3 +43,4 @@ try {
   assert.match(AppServerClient.toString(),/windowsHide: true/);
   console.log('PASS Windows graceful stop file closes injector and clears timers; CLI spawn hides console');
 })().catch(error=>{console.error(error);process.exitCode=1;});
+

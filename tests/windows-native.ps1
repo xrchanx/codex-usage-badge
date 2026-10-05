@@ -1,4 +1,4 @@
-﻿# Native Windows smoke test with disposable data and a synthetic CLI; no real account/client.
+# Native Windows smoke test with disposable data and a synthetic CLI; no real account/client.
 $ErrorActionPreference = 'Stop'
 if ($env:OS -ne 'Windows_NT') { throw 'Windows runner required' }
 $root = Split-Path -Parent $PSScriptRoot
@@ -9,17 +9,8 @@ $temp = Join-Path ([IO.Path]::GetTempPath()) ('badge-native-中文 空格-' + [g
 $originalLocal = $env:LOCALAPPDATA
 $originalCodeHome = $env:CODEX_HOME
 $originalEnv = @{}
-foreach ($key in @('CODEX_BADGE_APP','CODEX_BADGE_BIN','CODEX_BADGE_PORT','CODEX_BADGE_STOP_FILE')) { $originalEnv[$key] = [Environment]::GetEnvironmentVariable($key) }
+foreach ($key in @('CODEX_BADGE_APP','CODEX_BADGE_BIN','CODEX_BADGE_STOP_FILE')) { $originalEnv[$key] = [Environment]::GetEnvironmentVariable($key) }
 function Assert($Condition, [string]$Message) { if (!$Condition) { throw $Message } }
-function Isolate-Package([string]$Directory) {
-    # A developer may have a real client listening on 39222. Fixture agents and
-    # uninstall cleanup must never connect to it, including in child supervisors.
-    foreach($file in @(Get-ChildItem -LiteralPath $Directory -Recurse -File | Where-Object { $_.Extension -in @('.cjs','.ps1','.cs') })) {
-        $text=[IO.File]::ReadAllText($file.FullName).Replace('39222','49323')
-        $encoding=New-Object Text.UTF8Encoding($file.Extension -eq '.ps1')
-        [IO.File]::WriteAllText($file.FullName,$text,$encoding)
-    }
-}
 try {
     [void][IO.Directory]::CreateDirectory($temp)
     $env:LOCALAPPDATA = $temp
@@ -34,7 +25,6 @@ try {
     $runtime = (Get-Command node.exe -CommandType Application | Select-Object -First 1).Source
     $fixturePackage=Join-Path $temp 'isolated-package'
     Copy-Item -LiteralPath $package -Destination $fixturePackage -Recurse
-    Isolate-Package $fixturePackage
     . (Join-Path $fixturePackage 'manage-windows.ps1') -Action Functions
     Initialize-Context
     # Use real .lnk APIs but keep the links away from the runner's startup/desktop folders.
@@ -87,7 +77,6 @@ try {
     $updateArchive=Join-Path $root ('dist/CodexUsageBadge-Windows-'+$releaseVersion+'.zip')
     $validated=Join-Path $temp 'validated-update'
     [void](Expand-ValidatedUpdate $updateArchive $validated $releaseVersion (Get-FileHash -LiteralPath $updateArchive -Algorithm SHA256).Hash.ToLowerInvariant())
-    Isolate-Package $validated
     . (Join-Path $validated 'manage-windows.ps1') -Action Functions
     Initialize-Context
     $script:DesktopLink=Join-Path $temp 'Test Desktop.lnk';$script:StartupLink=Join-Path $temp 'Test Startup.lnk'
@@ -112,3 +101,4 @@ try {
     Assert ($resolved.StartsWith([IO.Path]::GetFullPath([IO.Path]::GetTempPath()),[StringComparison]::OrdinalIgnoreCase) -and (Split-Path -Leaf $resolved) -like 'badge-native-*') 'cleanup must stay inside fixture root'
     if (Test-Path -LiteralPath $resolved) { Remove-Item -LiteralPath $resolved -Recurse -Force }
 }
+

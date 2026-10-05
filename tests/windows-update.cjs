@@ -1,14 +1,14 @@
 'use strict';
 const assert=require('node:assert/strict');
 const crypto=require('node:crypto');
-const {compareVersions,selectRelease,verifyArchive,checkForUpdate,getBytes,INTERVAL}=require('../windows/update.cjs');
+const {updatesEnabled,compareVersions,selectRelease,verifyArchive,checkForUpdate,getBytes,INTERVAL}=require('../windows/update.cjs');
 const data=Buffer.from('synthetic Windows archive');
 const hash=crypto.createHash('sha256').update(data).digest('hex');
 function release(version,extra={}) {
-  const tag='v'+version+'-windows',base='https://github.com/jaykinhoo9/codex-usage-badge/releases/download/'+tag+'/';
+  const tag='v'+version+'-windows',base='https://github.com/xrchanx/codex-usage-badge/releases/download/'+tag+'/';
   return {tag_name:tag,published_at:'2026-01-01T00:00:00Z',draft:false,assets:[
     {name:`CodexUsageBadge-Windows-${version}.zip`,state:'uploaded',size:data.length,digest:'sha256:'+hash,browser_download_url:base+`CodexUsageBadge-Windows-${version}.zip`},
-    {name:'SHA256SUMS.txt',state:'uploaded',size:130,browser_download_url:base+'SHA256SUMS.txt'}
+    {name:'SHA256SUMS.txt',state:'uploaded',size:Buffer.byteLength(`${hash}  CodexUsageBadge-Windows-${version}.zip\n`),browser_download_url:base+'SHA256SUMS.txt'}
   ],...extra};
 }
 function server(releases,{badHash=false,error=false}={}) {
@@ -23,6 +23,7 @@ function server(releases,{badHash=false,error=false}={}) {
   return {fetcher,requests};
 }
 (async()=>{
+  for(const preference of [undefined,null,{}, {Enabled:false},{Enabled:'true'}])assert.equal(updatesEnabled(preference),false);assert.equal(updatesEnabled({Enabled:true}),true);
   assert.equal(compareVersions('0.10.1','0.10.0'),1);
   assert.equal(compareVersions('0.10.1','0.10.1-dev.1'),1);
   assert.equal(compareVersions('0.10.1-dev.2','0.10.1-dev.10'),-1);
@@ -31,6 +32,8 @@ function server(releases,{badHash=false,error=false}={}) {
   const wrong=release('5.0.0');wrong.assets[0].browser_download_url='https://example.invalid/update.zip';
   assert.equal(selectRelease([release('0.10.2'),release('0.10.10'),release('9.0.0',{draft:true}),release('8.0.0',{tag_name:'v8.0.0-macos'}),release('7.0.0',{published_at:null}),wrong,release('6.0.0',{assets:[]})],'0.10.1').version,'0.10.10');
   assert.equal(selectRelease([release('0.10.1')],'0.10.1'),null);
+  for(const repo of ['jaykinhoo9/codex-usage-badge','other/repository']){const r=release('1.0.0');for(const a of r.assets)a.browser_download_url=a.browser_download_url.replace('xrchanx/codex-usage-badge',repo);assert.equal(selectRelease([r],'0.10.1'),null);}
+  assert.equal(selectRelease([release('1.0.0',{repository:{full_name:'other/repository'}})],'0.10.1'),null);
   const candidate=selectRelease([release('0.10.2')],'0.10.1'),manifest=Buffer.from(`${hash}  ${candidate.asset.name}\n`);
   assert.equal(verifyArchive(data,manifest,candidate),hash);
   assert.throws(()=>verifyArchive(Buffer.from('corrupt'),manifest,candidate),/size/);
@@ -48,6 +51,8 @@ function server(releases,{badHash=false,error=false}={}) {
   records=[];await assert.rejects(checkForUpdate({...options,installPackage:async()=>{throw Error('fixture rollback');}}),/rollback/);assert.equal(records.at(-1).event,'error');
   assert.equal((await checkForUpdate({...options,fetcher:server([release('0.10.0')]).fetcher,force:true,state:{checkedAt:100000000}})).event,'up-to-date');
   assert.equal((await checkForUpdate({...options,state:{checkedAt:100000000+INTERVAL}})).event,'updated');
-  await assert.rejects(getBytes('fixture',2,async()=>new Response('too large')),/size limit/);
+  await assert.rejects(getBytes('https://api.github.com/repos/xrchanx/codex-usage-badge/releases?per_page=100',2,async()=>new Response('too large')),/size limit/);
+  let checkInstalls=0;assert.equal((await checkForUpdate({...options,checkOnly:true,installPackage:()=>{checkInstalls++;}})).event,'available');assert.equal(checkInstalls,0);
   console.log('PASS Windows update versions, platform filter, trusted asset URLs, SHA-256, interval, offline retry, corruption, failed install, manual check');
 })().catch(error=>{console.error(error);process.exitCode=1;});
+

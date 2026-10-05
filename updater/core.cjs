@@ -3,10 +3,12 @@ const fs=require('node:fs');
 const path=require('node:path');
 const crypto=require('node:crypto');
 const zlib=require('node:zlib');
-const repository='jaykinhoo9/codex-usage-badge';
+const {repository,fetchResponse,validReleaseMetadata,verifyAssetBytes}=require('./network.cjs');
+const localState=require('../runtime/state.cjs');
 const intervalMs=6*60*60*1000;
-const maxArchive=16*1024*1024,maxExpanded=48*1024*1024;
-const required=['agent.cjs','manage.cjs','macos/shortcuts.cjs','macos/startup/bridge','macos/startup/controller.cjs','macos/startup/watch.cjs','updater/core.cjs','updater/worker.cjs','updater/run.sh','update.json'];
+const maxArchive=16*1024*1024,maxExpanded=20*1024*1024,maxFile=8*1024*1024;
+const required=['agent.cjs','manage.cjs','macos/shortcuts.cjs','macos/startup/bridge','macos/startup/controller.cjs','macos/startup/watch.cjs','runtime/state.cjs','updater/network.cjs','updater/core.cjs','updater/worker.cjs','updater/run.sh','update.json'];
+const allowed=new Set([...required,'SHA256SUMS.txt','README.md','CHANGELOG.md','LICENSE','SECURITY.md','docs/windows.md','docs/macos.md','docs/development.md','assets/cover.png','scripts/mac-entry.sh','安装.command','诊断.command','卸载.command','检查更新.command','关闭自动更新.command','开启自动更新.command','更新.command']);
 function versionParts(value){
   if(typeof value!=='string'||!/^\d+\.\d+\.\d+$/.test(value))throw Error('无效版本号');
   const parts=value.split('.').map(Number);
@@ -20,30 +22,27 @@ function selectRelease(releases,currentVersion,{allowPrerelease=true}={}){
   for(const release of releases){
     if(!release||release.draft||!release.published_at||(!allowPrerelease&&release.prerelease)||!Array.isArray(release.assets))continue;
     const match=/^v(\d+\.\d+\.\d+)-macos$/.exec(release.tag_name||'');
-    if(!match)continue;
+    if(!match||!validReleaseMetadata(release,release.tag_name))continue;
     const version=match[1];
     if(compareVersions(version,currentVersion)<=0)continue;
     const name=`CodexUsageBadge-macOS-${version}.zip`;
+    const sums=release.assets.filter(a=>a.name==='SHA256SUMS.txt'&&a.state==='uploaded');
+    if(sums.length!==1)continue;const checksum=sums[0];
+    if(!Number.isSafeInteger(checksum.size)||checksum.size<=0||checksum.size>65536||checksum.browser_download_url!==`https://github.com/${repository}/releases/download/${release.tag_name}/SHA256SUMS.txt`)continue;
     const assets=release.assets.filter(a=>a.name===name&&a.state==='uploaded');
     if(assets.length!==1)continue;
     const asset=assets[0];
     if(!/^sha256:[a-f0-9]{64}$/i.test(asset.digest||'')||!Number.isSafeInteger(asset.size)||asset.size<=0||asset.size>maxArchive)continue;
     const url=`https://github.com/${repository}/releases/download/${release.tag_name}/${name}`;
     if(asset.browser_download_url!==url)continue;
-    if(!best||compareVersions(version,best.version)>0)best={version,tag:release.tag_name,url,name,size:asset.size,digest:asset.digest.slice(7).toLowerCase()};
+    if(!best||compareVersions(version,best.version)>0)best={version,tag:release.tag_name,url,name,size:asset.size,digest:asset.digest.slice(7).toLowerCase(),checksum};
   }
   return best;
 }
-function allowedDownload(url){
-  const u=new URL(url);
-  return u.protocol==='https:'&&!u.username&&!u.password&&(!u.port||u.port==='443')&&
-    ['github.com','release-assets.githubusercontent.com','objects.githubusercontent.com','github-releases.githubusercontent.com'].includes(u.hostname);
-}
 async function fetchBytes(url,{fetchImpl=fetch,limit,signal,timeoutMs=60000}={}){
   const abort=AbortSignal.timeout(timeoutMs),combined=signal?AbortSignal.any([signal,abort]):abort;
-  const response=await fetchImpl(url,{headers:{'User-Agent':'CodexUsageBadge-Updater','Accept':url.includes('api.github.com')?'application/vnd.github+json':'application/octet-stream'},signal:combined});
+  const response=await fetchResponse(url,{fetchImpl,headers:{'User-Agent':'CodexUsageBadge-Updater','Accept':url.includes('api.github.com')?'application/vnd.github+json':'application/octet-stream'},signal:combined});
   if(!response.ok)throw Error(`GitHub 请求失败（HTTP ${response.status}）`);
-  if(response.url&&url.includes('/releases/download/')&&!allowedDownload(response.url))throw Error('拒绝非 GitHub 安装包地址');
   const length=Number(response.headers.get('content-length'));
   if(length>limit)throw Error('下载内容超出大小限制');
   if(!response.body)throw Error('下载内容为空');
@@ -79,8 +78,9 @@ function readArchive(buffer,version){
     if(offset>end||flags&~0x808||![0,8].includes(method)||((mode&0xf000)!==0&&(mode&0xf000)!==0x8000)||buffer.readUInt16LE(offset-46-nameSize-extra-comment+34)!==0)throw Error('不支持的 ZIP 文件类型');
     if(!name.startsWith(prefix)||!safeName(name.slice(prefix.length)))throw Error('安装包包含不安全路径');
     const relative=name.slice(prefix.length),key=relative.toLowerCase();
+    if(!allowed.has(relative))throw Error('安装包包含额外文件');
     if(names.has(key))throw Error('安装包包含重复文件');names.add(key);
-    total+=size;if(total>maxExpanded||size>maxExpanded)throw Error('解压内容超出大小限制');
+    total+=size;if(total>maxExpanded||size>maxFile)throw Error('解压内容超出大小限制');
     if(local+30>start||buffer.readUInt32LE(local)!==0x04034b50||buffer.readUInt16LE(local+6)!==flags||buffer.readUInt16LE(local+8)!==method)throw Error('无效 ZIP 文件头');
     const localNameSize=buffer.readUInt16LE(local+26),localExtra=buffer.readUInt16LE(local+28);
     if(buffer.subarray(local+30,local+30+localNameSize).toString('utf8')!==name)throw Error('ZIP 路径不一致');
@@ -94,9 +94,11 @@ function readArchive(buffer,version){
   if(offset!==end)throw Error('ZIP 索引长度不一致');
   for(const name of files.keys())for(const other of files.keys())if(other.startsWith(name+'/'))throw Error('ZIP 文件与目录冲突');
   for(const name of required)if(!files.has(name))throw Error('安装包缺少更新组件');
+  if(files.get('update.json').data.length>65536)throw Error('更新清单超出大小限制');
   const manifest=JSON.parse(files.get('update.json').data.toString('utf8'));
   if(manifest.schema!==1||manifest.repository!==repository||manifest.platform!=='macOS'||manifest.version!==version)throw Error('更新包版本或来源不匹配');
   const sums=files.get('SHA256SUMS.txt');if(!sums)throw Error('安装包缺少校验清单');
+  if(sums.data.length>65536)throw Error('校验清单超出大小限制');
   const checked=new Set();
   for(const line of sums.data.toString('utf8').trim().split('\n')){
     const m=/^([a-f0-9]{64})  (.+)$/.exec(line);
@@ -108,35 +110,18 @@ function readArchive(buffer,version){
   return files;
 }
 function extractArchive(files,destination){
-  fs.mkdirSync(destination,{mode:0o700});
+  localState.assertNoLinks(destination);fs.mkdirSync(destination,{mode:0o700});
   for(const [name,{data,mode}] of files){const target=path.join(destination,name);fs.mkdirSync(path.dirname(target),{recursive:true,mode:0o700});fs.writeFileSync(target,data,{flag:'wx',mode:mode&0o111?0o700:0o600});}
 }
-function writeJson(file,value){
-  fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});const temp=file+'.tmp-'+crypto.randomUUID();
-  try{fs.writeFileSync(temp,JSON.stringify(value,null,2)+'\n',{mode:0o600,flag:'wx'});fs.renameSync(temp,file);}finally{fs.rmSync(temp,{force:true});}
-}
-function readJson(file){try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch(error){if(error.code==='ENOENT')return null;throw error;}}
-function acquireLock(directory,{pid=process.pid,now=Date.now,isAlive=p=>{try{process.kill(p,0);return true;}catch(e){return e.code!=='ESRCH';}}}={}){
-  fs.mkdirSync(path.dirname(directory),{recursive:true,mode:0o700});
-  for(let attempt=0;attempt<2;attempt++){
-    try{fs.mkdirSync(directory,{mode:0o700});fs.writeFileSync(path.join(directory,'owner.json'),JSON.stringify({pid,startedAt:now()}),{mode:0o600,flag:'wx'});return ()=>fs.rmSync(directory,{recursive:true,force:true});}
-    catch(error){
-      if(error.code!=='EEXIST')throw error;
-      if(fs.lstatSync(directory).isSymbolicLink())throw Error('更新锁目录不能是链接');
-      let owner;try{owner=readJson(path.join(directory,'owner.json'));}catch{}
-      const predatesBoot=Number.isFinite(owner?.startedAt)&&owner.startedAt<now()-require('node:os').uptime()*1000-10000;
-      if(owner&&Number.isSafeInteger(owner.pid)&&owner.pid>0){if(!predatesBoot&&isAlive(owner.pid))return null;}
-      else if(now()-fs.statSync(directory).mtimeMs<120000)return null;
-      fs.rmSync(directory,{recursive:true,force:true});
-    }
-  }
-  return null;
-}
+function writeJson(file,value){localState.writeJson(file,value);}
+function readJson(file){localState.assertNoLinks(file);try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch(error){if(error.code==='ENOENT')return null;throw error;}}
+const acquireLock=localState.acquireLock;
 async function updateOnce({installDir,cacheDir,fetchImpl=fetch,install,now=Date.now,signal,force=false,checkOnly=false}){
+  localState.assertOwned(installDir);localState.secureDirectory(cacheDir);
   const stateFile=path.join(cacheDir,'state.json');
   const settings=readJson(path.join(installDir,'update-settings.json'));
-  if(settings?.owner!=='codex-usage-badge-updater-v1')throw Error('自动更新未配置');
-  if(settings.enabled===false&&!checkOnly){writeJson(stateFile,{event:'disabled',checkedAt:now()});return {event:'disabled'};}
+  if(settings&&settings.owner!=='codex-usage-badge-updater-v1')throw Error('自动更新配置无效');
+  if(settings?.enabled!==true&&!checkOnly&&!force){writeJson(stateFile,{event:'disabled',checkedAt:now()});return {event:'disabled'};}
   const current=readJson(path.join(installDir,'installed-version.json'));
   if(current?.platform!=='macOS'||current.repository!==repository)throw Error('安装版本记录无效');
   versionParts(current.version);
@@ -149,14 +134,20 @@ async function updateOnce({installDir,cacheDir,fetchImpl=fetch,install,now=Date.
   try{
     record({event:'checking'});
     const raw=await fetchBytes(`https://api.github.com/repos/${repository}/releases?per_page=100`,{fetchImpl,limit:2*1024*1024,signal,timeoutMs:20000});
-    const release=selectRelease(JSON.parse(raw.toString('utf8')),current.version,{allowPrerelease:settings.allowPrerelease!==false});
+    const release=selectRelease(JSON.parse(raw.toString('utf8')),current.version,{allowPrerelease:settings?.allowPrerelease!==false});
     if(!release)return record({event:'up_to_date'});
     if(checkOnly)return record({event:'available',availableVersion:release.version,nextCheckAt:last?.nextCheckAt||0});
     record({event:'downloading',availableVersion:release.version});
     const bytes=await fetchBytes(release.url,{fetchImpl,limit:maxArchive,signal});
     if(bytes.length!==release.size||crypto.createHash('sha256').update(bytes).digest('hex')!==release.digest)throw Error('GitHub 安装包校验失败');
+    const external=await fetchBytes(release.checksum.browser_download_url,{fetchImpl,limit:65536,signal});
+    verifyAssetBytes(external,release.checksum);
+    const lines=external.toString('utf8').split(/\r?\n/).filter(Boolean);
+    if(lines.some(line=>!/^([a-f0-9]{64})  (.+)$/.test(line)))throw Error('无效外部校验清单');
+    const matches=lines.filter(line=>line.endsWith('  '+release.name));
+    if(matches.length!==1||matches[0]!==`${release.digest}  ${release.name}`)throw Error('外部安装包校验失败');
     const files=readArchive(bytes,release.version);signal?.throwIfAborted();
-    if(readJson(path.join(installDir,'update-settings.json'))?.enabled===false)return record({event:'disabled'});
+    if(readJson(path.join(installDir,'update-settings.json'))?.enabled!==true&&!force)return record({event:'disabled'});
     const latest=readJson(path.join(installDir,'installed-version.json'));
     if(latest?.repository!==repository||latest.platform!=='macOS')throw Error('安装版本记录已改变');
     if(compareVersions(latest.version,release.version)>=0)return record({event:'up_to_date',currentVersion:latest.version});
@@ -167,7 +158,8 @@ async function updateOnce({installDir,cacheDir,fetchImpl=fetch,install,now=Date.
     if(readJson(path.join(installDir,'update-settings.json'))?.enabled===false&&updated?.version===current.version)return record({event:'disabled'});
     if(updated?.repository!==repository||updated.platform!=='macOS'||compareVersions(updated.version,release.version)<0)throw Error('更新后的版本确认失败');
     return record({event:'updated',currentVersion:updated.version,previousVersion:current.version});
-  }catch(error){record({event:'error',message:error.message});throw error;}
-  finally{if(stage)fs.rmSync(stage,{recursive:true,force:true});unlock();}
+  }catch(error){record({event:'error',message:'Update request, verification or installation failed'});throw error;}
+  finally{if(stage){localState.assertNoLinks(stage);fs.rmSync(stage,{recursive:true,force:true});}unlock();}
 }
 module.exports={repository,intervalMs,versionParts,compareVersions,selectRelease,fetchBytes,readArchive,extractArchive,writeJson,readJson,acquireLock,updateOnce};
+

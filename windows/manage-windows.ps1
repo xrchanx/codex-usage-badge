@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('Install','Launch','Run','Uninstall','Status','Update','CheckUpdate','UpdatesOn','UpdatesOff','Functions')][string]$Action = 'Status',
+    [ValidateSet('Install','Launch','Run','Uninstall','Status','Update','CheckUpdate','AutoUpdate','UpdatesOn','UpdatesOff','Functions')][string]$Action = 'Status',
     [string]$AppExe, [string]$NodeExe, [string]$CodexBin, [string]$CodexHome,
     [switch]$DisableAutoUpdate, [switch]$AutomaticUpdate, [switch]$ForceUpdate
 )
@@ -18,8 +18,34 @@ function Get-Setting($Object, [string]$Name) {
     if ($null -ne $Object -and $null -ne $Object.PSObject.Properties[$Name]) { return $Object.$Name }
     return $null
 }
+function Assert-SafePath([string]$Path) {
+    $current = [IO.Path]::GetFullPath($Path)
+    while ($current) {
+        if (Test-Path -LiteralPath $current) {
+            if ((Get-Item -LiteralPath $current -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Plugin path cannot contain reparse points' }
+        }
+        $current = Split-Path -Parent $current
+    }
+}
+function Set-PrivateDirectory([string]$Path) {
+    Assert-SafePath $Path
+    [void][IO.Directory]::CreateDirectory($Path)
+    $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User
+    $acl = New-Object Security.AccessControl.DirectorySecurity
+    $acl.SetOwner($sid); $acl.SetAccessRuleProtection($true,$false)
+    $rule = New-Object Security.AccessControl.FileSystemAccessRule($sid,'FullControl','ContainerInherit,ObjectInherit','None','Allow')
+    $acl.AddAccessRule($rule); Set-Acl -LiteralPath $Path -AclObject $acl
+}
 function Write-Utf8([string]$Path, [string]$Text) {
-    [IO.File]::WriteAllText($Path, $Text, (New-Object Text.UTF8Encoding($false)))
+    Assert-SafePath $Path
+    $temp = $Path + '.write-' + [guid]::NewGuid().ToString('N')
+    $backup = $Path + '.write-backup-' + [guid]::NewGuid().ToString('N')
+    try {
+        $stream = [IO.File]::Open($temp,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+        try { $bytes = [Text.Encoding]::UTF8.GetBytes($Text); $stream.Write($bytes,0,$bytes.Length); $stream.Flush($true) } finally { $stream.Dispose() }
+        Assert-SafePath $Path
+        if (Test-Path -LiteralPath $Path) { [IO.File]::Replace($temp,$Path,$backup) } else { [IO.File]::Move($temp,$Path) }
+    } finally { foreach ($file in @($temp,$backup)) { if (Test-Path -LiteralPath $file) { Assert-SafePath $file; Remove-Item -LiteralPath $file -Force } } }
 }
 function Write-Json([string]$Path, $Value) {
     $temp = $Path + '.tmp-' + [guid]::NewGuid().ToString('N')
@@ -34,9 +60,11 @@ function Write-Json([string]$Path, $Value) {
     }
 }
 function Read-Json([string]$Path) {
+    Assert-SafePath $Path
     if (Test-Path -LiteralPath $Path -PathType Leaf) { Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json }
 }
 function Assert-OwnedDirectory([string]$Path) {
+    Assert-SafePath $Path
     if (!(Test-Path -LiteralPath $Path)) { return }
     $item = Get-Item -LiteralPath $Path -Force
     $marker = Join-Path $Path '.codex-usage-badge-owner'
@@ -182,7 +210,7 @@ function Resolve-Configuration($Saved, $Overrides) {
     [pscustomobject]@{
         Schema = 1; Version = $script:Version; AppExe = $selectedApp
         NodeExe = Select-Runtime $nodes 'Node'; CodexBin = Select-Runtime $bins 'CLI'
-        CodexHome = $homePath; Port = 39222; Overrides = [pscustomobject]$custom
+        CodexHome = $homePath; Overrides = [pscustomobject]$custom
     }
 }
 function Get-ManagerArguments([string]$Mode) {
@@ -274,12 +302,22 @@ function Test-OwnedShortcut([string]$Path, [string]$Mode) {
     } catch { return $false }
 }
 function Assert-ShortcutAvailable([string]$Path, [string]$Mode) {
+    Assert-SafePath $Path
     if ((Test-Path -LiteralPath $Path) -and !(Test-OwnedShortcut $Path $Mode)) { throw "快捷方式名称已被其他文件占用，未修改：$Path" }
 }
 function Write-Shortcut([string]$Path, [string]$Mode, [string]$Icon) {
     Assert-ShortcutAvailable $Path $Mode
     Initialize-ShortcutApi
-    [CodexUsageBadge.Shortcuts]::Write($Path, $script:PowerShell, (Get-ManagerArguments $Mode), $script:InstallRoot, $Icon)
+    $temp = Join-Path ([IO.Path]::GetDirectoryName($Path)) ('.badge-' + [Guid]::NewGuid().ToString('N') + '.lnk')
+    $backup = $temp + '.bak'
+    try {
+        [CodexUsageBadge.Shortcuts]::Write($temp, $script:PowerShell, (Get-ManagerArguments $Mode), $script:InstallRoot, $Icon)
+        Assert-SafePath $Path
+        if ([IO.File]::Exists($Path)) { [IO.File]::Replace($temp, $Path, $backup) }
+        else { [IO.File]::Move($temp, $Path) }
+    } finally {
+        foreach ($file in @($temp, $backup)) { if ([IO.File]::Exists($file)) { [IO.File]::Delete($file) } }
+    }
 }
 function Test-Worker {
     $mutex = $null
@@ -315,6 +353,7 @@ function Start-Worker {
 }
 function Run-Worker {
     Assert-OwnedDirectory $script:InstallRoot
+    Set-PrivateDirectory $script:InstallRoot
     $mutex = New-Object Threading.Mutex($false, $script:MutexName)
     $owned = $false
     $child = $null
@@ -331,13 +370,12 @@ function Run-Worker {
                 $config = Resolve-Configuration (Read-Json $script:ConfigPath) $null
                 Write-Json $script:ConfigPath $config
                 $logRoot = Join-Path $script:InstallRoot 'logs'
-                [void][IO.Directory]::CreateDirectory($logRoot)
-                Get-ChildItem -LiteralPath $logRoot -File | Sort-Object LastWriteTimeUtc -Descending | Select-Object -Skip 8 | Remove-Item -Force
+                Set-PrivateDirectory $logRoot
+                Get-ChildItem -LiteralPath $logRoot -File | Sort-Object LastWriteTimeUtc -Descending | Select-Object -Skip 8 | ForEach-Object { Assert-SafePath $_.FullName; Remove-Item -LiteralPath $_.FullName -Force }
                 $stamp = [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss-fff')
                 $env:CODEX_BADGE_APP = $config.AppExe
                 $env:CODEX_BADGE_BIN = $config.CodexBin
                 $env:CODEX_HOME = $config.CodexHome
-                $env:CODEX_BADGE_PORT = [string]$config.Port
                 $generationStop = Join-Path $script:InstallRoot ('worker-stop-' + [guid]::NewGuid().ToString('N') + '.request')
                 $env:CODEX_BADGE_STOP_FILE = $generationStop
                 $child = Start-Process -FilePath $config.NodeExe -ArgumentList (Join-NativeArguments @((Join-Path $script:InstallRoot 'agent.cjs'))) -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $logRoot ($stamp + '.out.log')) -RedirectStandardError (Join-Path $logRoot ($stamp + '.err.log'))
@@ -358,7 +396,7 @@ function Run-Worker {
                     if ([DateTime]::UtcNow -ge $nextUpdateCheck -and !(Test-Path -LiteralPath $script:StopPath)) {
                         $nextUpdateCheck = [DateTime]::UtcNow.AddMinutes(5)
                         if (Get-AutoUpdateEnabled) {
-                            Start-Process -FilePath $script:PowerShell -ArgumentList (Get-ManagerArguments 'CheckUpdate') -WindowStyle Hidden | Out-Null
+                            Start-Process -FilePath $script:PowerShell -ArgumentList (Get-ManagerArguments 'AutoUpdate') -WindowStyle Hidden | Out-Null
                         }
                     }
                     if ([DateTime]::UtcNow -ge $nextPathCheck) {
@@ -381,7 +419,7 @@ function Run-Worker {
                 Stop-WorkerChildren $child $startup $generationStop
                 if ($child) { $child.Dispose(); $child = $null }
                 if ($startup) { $startup.Dispose(); $startup = $null }
-                Write-Json $script:StatePath @{ State = 'error'; Message = $_.Exception.Message; Version = $script:Version }
+                Write-Json $script:StatePath @{ State = 'error'; Message = 'Background worker failed; run Status for diagnostics'; Version = $script:Version }
             } finally {
                 if ($generationStop -and (Test-Path -LiteralPath $generationStop)) { Remove-Item -LiteralPath $generationStop -Force }
             }
@@ -430,9 +468,15 @@ function Install-Badge($Overrides) {
     $swapped = $false
     $oldMoved = $false
     try {
-        [void][IO.Directory]::CreateDirectory($stage)
+        Set-PrivateDirectory $stage
         Write-Utf8 (Join-Path $stage '.codex-usage-badge-owner') $script:Owner
-        foreach ($name in @('manage-windows.ps1','agent.cjs','bridge.cjs','update.cjs','update-windows.ps1','Install.cmd','Launch.cmd','Status.cmd','Uninstall.cmd','Update.cmd','README-Windows.md')) {
+        foreach ($name in @('manage-windows.ps1','agent.cjs','bridge.cjs','update.cjs','update-windows.ps1','Install.cmd','Launch.cmd','Status.cmd','Uninstall.cmd','Update.cmd','CheckUpdate.cmd','UpdatesOn.cmd','UpdatesOff.cmd','README-Windows.md')) {
+            Assert-SafePath (Join-Path $PSScriptRoot $name)
+            Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination (Join-Path $stage $name)
+        }
+        foreach ($name in @('runtime/state.cjs','updater/network.cjs')) {
+            Set-PrivateDirectory (Split-Path -Parent (Join-Path $stage $name))
+            Assert-SafePath (Join-Path $PSScriptRoot $name)
             Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination (Join-Path $stage $name)
         }
         [void][IO.Directory]::CreateDirectory((Join-Path $stage 'startup'))
@@ -445,7 +489,14 @@ function Install-Badge($Overrides) {
             $oldFile = Join-Path $script:InstallRoot $name
             if (Test-Path -LiteralPath $oldFile) { Copy-Item -LiteralPath $oldFile -Destination (Join-Path $stage $name) }
         }
-        if ($DisableAutoUpdate) { Write-Json (Join-Path $stage 'update-preferences.json') @{ Enabled = $false } }
+        if ($DisableAutoUpdate -or !(Test-Path -LiteralPath (Join-Path $stage 'update-preferences.json'))) { Write-Json (Join-Path $stage 'update-preferences.json') @{ Enabled = $false } }
+        $oldSession = Join-Path $script:InstallRoot 'runtime/cdp-session.json'
+        if (Test-Path -LiteralPath $oldSession) {
+            Assert-SafePath $oldSession
+            $sessionCode = 'const r=require(process.argv[1]);console.log(JSON.stringify(r.readSession(process.argv[2])))'
+            $session = (Invoke-Hidden $config.NodeExe @('-e',$sessionCode,(Join-Path $PSScriptRoot 'runtime/state.cjs'),$script:InstallRoot)) | ConvertFrom-Json
+            Write-Json (Join-Path $stage 'runtime/cdp-session.json') $session
+        }
         $oldReceipt = Join-Path $script:InstallRoot 'startup/state.json'
         if (Test-Path -LiteralPath $oldReceipt) { Copy-Item -LiteralPath $oldReceipt -Destination (Join-Path $stage 'startup/state.json') }
         if (Test-Path -LiteralPath $script:InstallRoot) { Move-Item -LiteralPath $script:InstallRoot -Destination $backup; $oldMoved = $true }
@@ -465,7 +516,10 @@ function Install-Badge($Overrides) {
         if ($wasRunning) { Start-Worker }
         throw $failure
     } finally {
-        if (Test-Path -LiteralPath $stage) { Assert-OwnedDirectory $stage; Remove-Item -LiteralPath $stage -Recurse -Force }
+        if (Test-Path -LiteralPath $stage) {
+            try { Assert-OwnedDirectory $stage; Remove-Item -LiteralPath $stage -Recurse -Force }
+            catch { if ($null -eq $failure) { throw } }
+        }
     }
     Write-Host '安装成功。下次完全退出后，直接使用原来的 Codex 图标打开即可自动加载。'
     Write-Host '已打开的窗口不会被接管。若自动加载被安全保护跳过，可完全退出后运行 Launch.cmd。'
@@ -473,8 +527,9 @@ function Install-Badge($Overrides) {
 }
 function Get-DebugPages {
     try {
-        @(Invoke-RestMethod -Uri 'http://127.0.0.1:39222/json/list' -TimeoutSec 2 -UseBasicParsing) |
-            Where-Object { $_.url -match '^app://-/index\.html(?:[?#]|$)' -and $_.url -notmatch '(?i)overlay' }
+        $config = Read-Json $script:ConfigPath
+        $result = Invoke-Hidden $config.NodeExe @((Join-Path $script:InstallRoot 'bridge.cjs'),'status')
+        ($result | ConvertFrom-Json).windows
     } catch {}
 }
 function Launch-Badge {
@@ -490,7 +545,7 @@ function Launch-Badge {
     })
     if ($running.Count -gt 0) { throw '客户端已运行，但没有开启用量条连接。请从托盘菜单或客户端菜单完全退出，再运行 Launch.cmd。不会强制结束你的会话。' }
     # Only this explicit user action starts the GUI. The Run action cannot call this function.
-    Start-Process -FilePath $config.AppExe -ArgumentList '--remote-debugging-address=127.0.0.1 --remote-debugging-port=39222' | Out-Null
+    [void](Invoke-Hidden $config.NodeExe @((Join-Path $script:InstallRoot 'runtime/state.cjs'),'launch'))
     for ($i = 0; $i -lt 30; $i++) {
         if (@(Get-DebugPages).Count -gt 0) { return }
         Start-Sleep -Seconds 1
@@ -539,9 +594,10 @@ function Show-Status {
 
 function Get-AutoUpdateEnabled {
     $preference = Read-Json (Join-Path $script:InstallRoot 'update-preferences.json')
-    return (Get-Setting $preference 'Enabled') -ne $false
+    $value = Get-Setting $preference 'Enabled'
+    return ($value -is [bool]) -and $value
 }
-function Invoke-BadgeUpdate([bool]$Force) {
+function Invoke-BadgeUpdate([bool]$Force, [bool]$CheckOnly = $false) {
     Assert-OwnedDirectory $script:InstallRoot
     if (!$Force -and !(Get-AutoUpdateEnabled)) { return }
     $config = Read-Json $script:ConfigPath
@@ -549,6 +605,7 @@ function Invoke-BadgeUpdate([bool]$Force) {
     $info.FileName = $config.NodeExe
     $arguments = @((Join-Path $script:InstallRoot 'update.cjs'))
     if ($Force) { $arguments += '--force' }
+    if ($CheckOnly) { $arguments += '--check' }
     $info.Arguments = Join-NativeArguments $arguments
     $info.UseShellExecute = $false; $info.CreateNoWindow = $true
     $info.WindowStyle = [Diagnostics.ProcessWindowStyle]::Hidden
@@ -573,11 +630,11 @@ try {
     if ($Action -notin @('Run','Status')) {
         # This mutex survives crashes and stays held across an install directory swap.
         $suffix = '.manage'
-        if ($Action -in @('Update','CheckUpdate')) { $suffix = '.update' }
+        if ($Action -in @('Update','CheckUpdate','AutoUpdate')) { $suffix = '.update' }
         $operation = New-Object Threading.Mutex($false, ($script:MutexName + $suffix))
         try { $operationOwned = $operation.WaitOne(0) } catch [Threading.AbandonedMutexException] { $operationOwned = $true }
         if (!$operationOwned) {
-            if ($Action -eq 'CheckUpdate') { return }
+            if ($Action -eq 'AutoUpdate') { return }
             throw '另一个安装或更新操作正在进行，请稍后重试。'
         }
     }
@@ -588,7 +645,8 @@ try {
         'Uninstall' { Uninstall-Badge }
         'Status' { Show-Status }
         'Update' { Invoke-BadgeUpdate $true }
-        'CheckUpdate' { Invoke-BadgeUpdate $false }
+        'CheckUpdate' { Invoke-BadgeUpdate $true $true }
+        'AutoUpdate' { Invoke-BadgeUpdate $false }
         'UpdatesOn' { Assert-OwnedDirectory $script:InstallRoot; Write-Json (Join-Path $script:InstallRoot 'update-preferences.json') @{ Enabled=$true }; Write-Host '自动更新已开启。' }
         'UpdatesOff' { Assert-OwnedDirectory $script:InstallRoot; Write-Json (Join-Path $script:InstallRoot 'update-preferences.json') @{ Enabled=$false }; Write-Host '自动更新已关闭。' }
     }
@@ -602,3 +660,4 @@ try {
     if ($operationOwned) { $operation.ReleaseMutex() }
     if ($operation) { $operation.Dispose() }
 }
+

@@ -1,7 +1,7 @@
 'use strict';
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os'),crypto=require('node:crypto');
 const {compareVersions,selectRelease,readArchive,extractArchive,updateOnce,acquireLock,writeJson,readJson,fetchBytes}=require('../updater/core.cjs');
-const repo='jaykinhoo9/codex-usage-badge',version='0.9.5';
+const repo='xrchanx/codex-usage-badge',version='0.9.5';
 const hash=b=>crypto.createHash('sha256').update(b).digest('hex');
 function crc(data){let n=0xffffffff;for(const byte of data){n^=byte;for(let i=0;i<8;i++)n=n&1?(n>>>1)^0xedb88320:n>>>1;}return(n^0xffffffff)>>>0;}
 function zip(entries){
@@ -15,14 +15,14 @@ function zip(entries){
   const directory=Buffer.concat(central),end=Buffer.alloc(22);end.writeUInt32LE(0x06054b50);end.writeUInt16LE(entries.length,8);end.writeUInt16LE(entries.length,10);end.writeUInt32LE(directory.length,12);end.writeUInt32LE(offset,16);
   return Buffer.concat([...locals,directory,end]);
 }
-const contents=Object.fromEntries(['agent.cjs','manage.cjs','macos/shortcuts.cjs','macos/startup/bridge','macos/startup/controller.cjs','macos/startup/watch.cjs','updater/core.cjs','updater/worker.cjs','updater/run.sh'].map(n=>[n,Buffer.from('fixture') ]));
+const contents=Object.fromEntries(['agent.cjs','manage.cjs','macos/shortcuts.cjs','macos/startup/bridge','macos/startup/controller.cjs','macos/startup/watch.cjs','runtime/state.cjs','updater/network.cjs','updater/core.cjs','updater/worker.cjs','updater/run.sh'].map(n=>[n,Buffer.from('fixture') ]));
 contents['update.json']=Buffer.from(JSON.stringify({schema:1,repository:repo,platform:'macOS',version}));
 contents['SHA256SUMS.txt']=Buffer.from(Object.entries(contents).map(([n,b])=>`${hash(b)}  ${n}\n`).join(''));
 const entries=Object.entries(contents).map(([n,b])=>[`CodexUsageBadge-macOS-${version}/${n}`,b,n.endsWith('bridge')?0o100755:0o100644]);
 const archive=zip(entries);
 function release(v=version,{platform='macOS',digest=hash(archive),...extra}={}){
   const tag=`v${v}-${platform==='macOS'?'macos':'windows'}`,name=`CodexUsageBadge-${platform}-${v}.zip`;
-  return {tag_name:tag,published_at:'2026-01-01',draft:false,prerelease:true,assets:[{name,state:'uploaded',size:archive.length,digest:'sha256:'+digest,browser_download_url:`https://github.com/${repo}/releases/download/${tag}/${name}`}],...extra};
+  return {tag_name:tag,published_at:'2026-01-01',draft:false,prerelease:true,assets:[{name,state:'uploaded',size:archive.length,digest:'sha256:'+digest,browser_download_url:`https://github.com/${repo}/releases/download/${tag}/${name}`},{name:'SHA256SUMS.txt',state:'uploaded',size:Buffer.byteLength(`${hash(archive)}  ${name}\n`),browser_download_url:`https://github.com/${repo}/releases/download/${tag}/SHA256SUMS.txt`}],...extra};
 }
 assert.equal(compareVersions('0.10.0','0.9.99'),1);assert.equal(compareVersions('1.0.0','1.0.0'),0);assert.throws(()=>compareVersions('1.2','1.2.3'));
 assert.equal(selectRelease([release('0.10.1'),release('9.0.0',{platform:'Windows'}),release('0.9.9')],'0.9.4').version,'0.10.1');
@@ -32,16 +32,22 @@ assert.equal(selectRelease([release(version,{assets:[]})],'0.9.4'),null);
 assert.equal(selectRelease([release(version)],'0.9.4',{allowPrerelease:false}),null);
 const foreign=release();foreign.assets[0].browser_download_url='https://example.invalid/package.zip';assert.equal(selectRelease([foreign],'0.9.4'),null);
 assert.equal(readArchive(archive,version).size,entries.length);
+for(const foreignRepo of ['jaykinhoo9/codex-usage-badge','other/repository']){const r=release();for(const a of r.assets)a.browser_download_url=a.browser_download_url.replace(repo,foreignRepo);assert.equal(selectRelease([r],'0.9.4'),null);}
+assert.equal(selectRelease([release(version,{repository:{full_name:'other/repository'}})],'0.9.4'),null);
+assert.throws(()=>readArchive(zip(entries.map(e=>e[0].endsWith('/update.json')?[e[0],JSON.stringify({schema:1,repository:'other/repository',platform:'macOS',version})]:e)),version),/来源不匹配/);
+assert.throws(()=>readArchive(zip([...entries,[entries[0][0].toUpperCase(),'bad']]),version));
 assert.throws(()=>readArchive(zip([...entries,[`CodexUsageBadge-macOS-${version}/../../escape`,'bad']]),version),/不安全路径/);
 assert.throws(()=>readArchive(zip([...entries,[entries[0][0],'bad']]),version),/重复文件/);
 assert.throws(()=>readArchive(zip(entries.map((e,i)=>i===0?[e[0],e[1],0o120777]:e)),version),/文件类型/);
-assert.throws(()=>readArchive(zip([...entries,[`CodexUsageBadge-macOS-${version}/unexpected.cjs`,'bad']]),version),/未校验文件/);
+assert.throws(()=>readArchive(zip([...entries,[`CodexUsageBadge-macOS-${version}/unexpected.cjs`,'bad']]),version),/额外文件/);
 assert.throws(()=>readArchive(zip(entries.map(e=>e[0].endsWith('/agent.cjs')?[e[0],'altered']:e)),version),/文件校验失败/);
 assert.throws(()=>readArchive(archive,'0.9.6'),/不安全路径/);
 assert.throws(()=>readArchive(archive.subarray(0,archive.length-1),version));
-const temp=fs.mkdtempSync(path.join(os.tmpdir(),'badge-updater-'));
+const oversized=Buffer.from(archive),centralIndex=oversized.indexOf(Buffer.from([0x50,0x4b,0x01,0x02]));oversized.writeUInt32LE(8*1024*1024+1,centralIndex+24);
+assert.throws(()=>readArchive(oversized,version),/大小限制/);
+const temp=fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()),'badge-updater-'));
 function fixture(name){
-  const root=path.join(temp,name),installDir=path.join(root,'install'),cacheDir=path.join(root,'cache');fs.mkdirSync(installDir,{recursive:true});
+  const root=path.join(temp,name),installDir=path.join(root,'install'),cacheDir=path.join(root,'cache');fs.mkdirSync(installDir,{recursive:true,mode:0o700});fs.writeFileSync(path.join(installDir,'.codex-usage-badge-owner'),process.platform==='win32'?'local.codexusagebadge.windows':'local.codexusagebadge.macos');
   writeJson(path.join(installDir,'update-settings.json'),{owner:'codex-usage-badge-updater-v1',enabled:true,allowPrerelease:true});
   writeJson(path.join(installDir,'installed-version.json'),{version:'0.9.4',repository:repo,platform:'macOS'});
   return {installDir,cacheDir};
@@ -49,7 +55,7 @@ function fixture(name){
 function mockFetch(releases,bytes=archive){return async(url,options)=>{
   assert.equal(options.headers.Authorization,undefined,'no local GitHub credential may be forwarded');
   assert.ok(!JSON.stringify(options.headers).includes(process.env.USER||'nobody-known'));
-  return new Response(url.startsWith('https://api.github.com')?JSON.stringify(releases):bytes,{status:200});
+  return new Response(url.startsWith('https://api.github.com')?JSON.stringify(releases):url.endsWith('/SHA256SUMS.txt')?`${hash(archive)}  ${release().assets[0].name}\n`:bytes,{status:200});
 };}
 (async()=>{try{
   const extraction=path.join(temp,'extracted');extractArchive(readArchive(archive,version),extraction);
@@ -65,6 +71,7 @@ function mockFetch(releases,bytes=archive){return async(url,options)=>{
   assert.equal((await updateOnce({...f,install,fetchImpl:()=>{throw Error('cooldown must not fetch');},now:()=>now})).event,'cooldown');
   now+=7*3600000;assert.equal((await updateOnce({...f,install,fetchImpl:mockFetch([release()]),now:()=>now})).event,'up_to_date');assert.equal(installs,1);
   const check=fixture('check');assert.equal((await updateOnce({...check,fetchImpl:mockFetch([release()]),checkOnly:true,install:()=>{throw Error('check must not install');}})).event,'available');
+  const noPreference=fixture('missing-preference');fs.unlinkSync(path.join(noPreference.installDir,'update-settings.json'));assert.equal((await updateOnce({...noPreference,fetchImpl:()=>{throw Error('missing preference must not fetch');}})).event,'disabled');
   const disabled=fixture('disabled');writeJson(path.join(disabled.installDir,'update-settings.json'),{owner:'codex-usage-badge-updater-v1',enabled:false});
   assert.equal((await updateOnce({...disabled,fetchImpl:()=>{throw Error('disabled must not fetch');}})).event,'disabled');
   assert.equal((await updateOnce({...disabled,force:true,checkOnly:true,fetchImpl:mockFetch([release()])})).event,'available');
@@ -98,7 +105,8 @@ function mockFetch(releases,bytes=archive){return async(url,options)=>{
     const changed=await updateOnce({...changing,fetchImpl:changingFetch,install:()=>{calls++;}});
     assert.equal(changed.event,kind.startsWith('disabled')?'disabled':'up_to_date');assert.equal(calls,0);
   }
-  await assert.rejects(fetchBytes('https://github.com/x/releases/download/v/x.zip',{limit:100,fetchImpl:async()=>{const response=new Response('bad');Object.defineProperty(response,'url',{value:'https://example.invalid/payload'});return response;}}),/非 GitHub/);
-  await assert.rejects(fetchBytes('https://api.github.com/test',{limit:2,fetchImpl:async()=>new Response('too big')}),/大小限制/);
+  await assert.rejects(fetchBytes(`https://github.com/${repo}/releases/download/v0.9.5-macos/x.zip`,{limit:100,fetchImpl:async()=>{const response=new Response('bad');Object.defineProperty(response,'url',{value:'https://example.invalid/payload'});return response;}}),/GitHub/);
+  await assert.rejects(fetchBytes(`https://api.github.com/repos/${repo}/releases?per_page=100`,{limit:2,fetchImpl:async()=>new Response('too big')}),/大小限制/);
   console.log('PASS macOS release selection, no downgrade, opt-out/cooldown, hash and file manifest checks, ZIP traversal/duplicates/symlink refusal, verified extraction, offline/failed install retention, check-only and concurrent/stale locks');
 }finally{fs.rmSync(temp,{recursive:true,force:true});}})().catch(e=>{console.error(e);process.exitCode=1;});
+
